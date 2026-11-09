@@ -358,7 +358,7 @@ function phasesHtml(p, today) {
     return `<i class="now" style="left:calc(${ratio * 100}% - 1px)" title="今天"></i>`;
   };
   const bar = p.phases.map((ph) => `<span class="${ph.current ? 'current' : (ph.past ? 'past' : '')}" style="flex:${ph.days}" title="${esc(ph.name)}">${nowMark(ph)}</span>`).join('');
-  const labels = p.phases.map((ph) => `<div class="${ph.current ? 'current' : ''}" style="flex:${ph.days}" title="${esc(ph.name)}${ph.goal ? `：${esc(ph.goal)}` : ''}"><b>${esc(ph.name)}</b><span>${shortDate(ph.start)}–${shortDate(ph.end)}</span></div>`).join('');
+  const labels = p.phases.map((ph) => `<div class="${ph.current ? 'current' : ''}" style="flex:${ph.days}" title="${esc(ph.name)}${ph.goal ? `：${esc(ph.goal)}` : ''}"><b>${esc(ph.name)}</b><span>${shortDate(ph.task_start)}–${shortDate(ph.task_end)}</span></div>`).join('');
   return `<div class="phases"><div class="phase-track"><div class="phase-bar">${bar}</div><div class="phase-labels">${labels}</div></div></div>`;
 }
 

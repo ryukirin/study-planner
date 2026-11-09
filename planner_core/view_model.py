@@ -6,6 +6,7 @@ from typing import Any
 
 from .availability import STANDARD_TAGS, TAG_NAMES, Window, format_time
 from .jp_holidays import holidays_between
+from .notes_check import task_spans
 from .plan_spec import Session, format_date, parse_date, weekday_cn
 from .tasks import TASKS_PLAN_ID
 from .workspace import Workspace
@@ -118,6 +119,7 @@ def plans_payload(ws: Workspace, today: date) -> list[dict[str, Any]]:
     result = []
     for plan in ws.plans:
         status = ws.plan_status(plan, today)
+        spans = task_spans(plan, ws.expansions[plan.id])
         result.append({
             "id": plan.id, "name": plan.name, "goal": plan.goal, "category": plan.category,
             "color": ws.color_of(plan.id), "priority": plan.priority,
@@ -135,8 +137,9 @@ def plans_payload(ws: Workspace, today: date) -> list[dict[str, Any]]:
             "phases": [
                 {"name": phase.name, "goal": phase.goal, "focus": phase.focus, "start": format_date(phase.start),
                  "end": format_date(phase.end), "days": (phase.end - phase.start).days + 1,
+                 "task_start": format_date(span[0]), "task_end": format_date(span[1]),
                  "current": phase.start <= today <= phase.end, "past": phase.end < today}
-                for phase in plan.phases
+                for phase, span in zip(plan.phases, spans)
             ],
             "milestones": [{"date": format_date(item.day), "text": item.text, "note": item.note, "past": item.day < today}
                            for item in plan.milestones],

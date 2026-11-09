@@ -30,6 +30,11 @@ class PlannerApiTest(unittest.TestCase):
         self.assertEqual(state["calendar"]["2026-11-09"], "overdue")
         self.assertEqual(state["plans"][0]["sequences"][0]["next"], ["第1章", "第2章", "第3章"])
 
+    def test_phase_dates_include_task_span(self):
+        phase = self.api.state()["plans"][0]["phases"][0]
+        self.assertEqual((phase["start"], phase["end"], phase["days"]), ("2026-11-09", "2026-11-15", 7))
+        self.assertEqual((phase["task_start"], phase["task_end"]), ("2026-11-09", "2026-11-14"))
+
     def test_invalid_selected_falls_back_to_today(self):
         self.assertEqual(self.api.state("not-a-date")["selected"], "2026-11-17")
 
