@@ -345,7 +345,7 @@ class Workspace:
             no_slot += sum(1 for event in plan.events if not event.task.slot and event.task.time is None)
             if no_slot:
                 warnings.append(f"[{plan.id}] 有 {no_slot} 个任务模板既没有 slot 也没有 time，会被放进任意时间段")
-            warnings.extend(f"[{plan.id}] {issue}" for issue in phase_table_issues(plan))
+            warnings.extend(f"[{plan.id}] {issue}" for issue in phase_table_issues(plan, expansion))
         return warnings
 
     def plan_status(self, plan: Plan, today: date) -> PlanStatus:
