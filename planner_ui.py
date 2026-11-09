@@ -5,6 +5,8 @@ import hashlib
 import json
 import math
 import os
+import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -26,8 +28,59 @@ from planner_core.view_model import build_state, find_session
 from planner_core.workspace import Workspace, WorkspaceError
 
 APP_TITLE = "计划本"
+APP_VERSION = "0.2.0"
 PROFILE_FIELDS = ("version", "buffer_minutes", "weekly", "exceptions", "holidays", "holiday")
 SHORTCUT_NAME = "计划本.lnk"
+SKILL_NAME = "plan-builder"
+SKILL_MARKER = ".study-planner.json"  # 安装时写入，记录安装的版本
+
+
+# ---------- plan-builder skill 安装 ----------
+
+def skill_source_dir() -> str | None:
+    """App 自带的 skill 文件。打包时只放入 SKILL.md 和 references/*.md。"""
+    path = resource_path(os.path.join("skills", SKILL_NAME))
+    return path if os.path.isfile(os.path.join(path, "SKILL.md")) else None
+
+
+def skill_targets() -> list[tuple[str, str]]:
+    """Claude Code 总是安装，Codex 只在 ~/.codex 存在时安装。"""
+    home = os.path.expanduser("~")
+    targets = [("Claude Code", os.path.join(home, ".claude", "skills", SKILL_NAME))]
+    if os.path.isdir(os.path.join(home, ".codex")):
+        targets.append(("Codex", os.path.join(home, ".codex", "skills", SKILL_NAME)))
+    return targets
+
+
+def is_link(path: str) -> bool:
+    """符号链接或目录联接（junction）。"""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)  # FILE_ATTRIBUTE_REPARSE_POINT
+
+
+def installed_skill_version(target: str) -> str | None:
+    try:
+        with open(os.path.join(target, SKILL_MARKER), encoding="utf-8") as handle:
+            return json.load(handle).get("version")
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def copy_skill(source: str, target: str) -> None:
+    """复制 SKILL.md 和 references 下的 .md 文件。目标里的其他文件（例如 references/local/）保留不动。"""
+    os.makedirs(os.path.join(target, "references"), exist_ok=True)
+    shutil.copy2(os.path.join(source, "SKILL.md"), os.path.join(target, "SKILL.md"))
+    ref_dir = os.path.join(source, "references")
+    if os.path.isdir(ref_dir):
+        for name in os.listdir(ref_dir):
+            path = os.path.join(ref_dir, name)
+            if os.path.isfile(path) and name.endswith(".md"):
+                shutil.copy2(path, os.path.join(target, "references", name))
+    with open(os.path.join(target, SKILL_MARKER), "w", encoding="utf-8") as handle:
+        json.dump({"version": APP_VERSION, "installed": datetime.now().isoformat(timespec="seconds")}, handle)
 
 
 # ---------- 开机自启 ----------
@@ -173,7 +226,8 @@ class PlannerApi:
             state = build_state(self._ws, day, self._today())
             state["pomodoro"] = self._pomodoro.snapshot()
             state["app"] = {"autostart_supported": autostart_supported(), "autostart_enabled": autostart_enabled(),
-                            "tray": self._notifier is not None, "notifications_enabled": windows_toasts_enabled()}
+                            "tray": self._notifier is not None, "notifications_enabled": windows_toasts_enabled(),
+                            "version": APP_VERSION, "skill": self.skill_status()}
             return state
 
     def poll(self) -> dict[str, Any]:
@@ -344,6 +398,41 @@ class PlannerApi:
     def open_notification_settings(self) -> dict[str, Any]:
         """打开 Windows 的通知设置页，由用户自己修改。"""
         return self._open("ms-settings:notifications")
+
+    # ----- plan-builder skill -----
+
+    def skill_status(self) -> dict[str, Any]:
+        items = []
+        for label, target in skill_targets():
+            if is_link(target):
+                state, detail = "linked", f"链接到 {os.path.realpath(target)}"
+            elif os.path.isfile(os.path.join(target, "SKILL.md")):
+                version = installed_skill_version(target)
+                state = "installed" if version == APP_VERSION else "outdated"
+                detail = f"已安装 {version}" if version else "已安装（版本未知）"
+            else:
+                state, detail = "missing", "未安装"
+            items.append({"label": label, "target": target, "state": state, "detail": detail})
+        return {"available": skill_source_dir() is not None, "version": APP_VERSION, "targets": items}
+
+    def install_skill(self) -> dict[str, Any]:
+        """把 App 自带的 plan-builder skill 复制到 Claude Code（和 Codex）的 skills 目录。链接不覆盖。"""
+        source = skill_source_dir()
+        if source is None:
+            return {"ok": False, "error": "这个版本没有内置 skill 文件"}
+        results = []
+        for label, target in skill_targets():
+            if is_link(target):
+                results.append({"label": label, "state": "skipped",
+                                "message": f"{label}：{target} 是链接（指向 {os.path.realpath(target)}），没有覆盖"})
+                continue
+            try:
+                copy_skill(source, target)
+            except OSError as exc:
+                results.append({"label": label, "state": "error", "message": f"{label}：复制失败（{exc}）"})
+                continue
+            results.append({"label": label, "state": "installed", "message": f"{label}：已安装到 {target}"})
+        return {"ok": not any(item["state"] == "error" for item in results), "results": results}
 
     # ----- 番茄钟 -----
 
@@ -641,6 +730,10 @@ def main() -> None:
             instance.signal_first()
             return
         api = PlannerApi()
+        try:
+            paths.write_app_info(api._ws.home, APP_VERSION)  # 让命令行工具和 skill 找到这个 App 的数据目录
+        except OSError:
+            traceback.print_exc()
         runtime = DesktopRuntime(api)
         api._notifier = runtime.notify
         if autostart_supported() and api._ws.settings["app"]["autostart"] and not autostart_enabled():

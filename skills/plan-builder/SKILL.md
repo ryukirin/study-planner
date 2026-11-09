@@ -7,13 +7,15 @@ description: 为计划本 App 生成和调整个人计划，并写入 App 自动
 
 ## 路径
 
-- App 项目：本 skill 所在仓库（study-planner）的根目录，下文写作 `<仓库根目录>`。skill 目录常通过链接放在 `.claude\skills` 或 `.codex\skills` 下，先解析出实际位置再往上两级：
+- 命令行工具，下文简写为 `planner_cli`。按顺序确定：
+  1. 读 `%APPDATA%\StudyPlanner\app.json` 的 `cli`。这是计划本每次启动时写入的命令数组，例如 `["D:\\Tools\\StudyPlanner\\planner-cli.exe"]`，按数组原样执行，后面接子命令。
+  2. 没有这个文件或 `cli` 为空时，请用户先运行一次计划本（`StudyPlanner.exe`），并确认 `planner-cli.exe` 和 `StudyPlanner.exe` 在同一个文件夹。
+  3. 用户从源码运行（本 skill 位于 study-planner 仓库的 `skills\plan-builder`）时，也可以用 `python "<仓库根目录>\planner_cli.py"`。skill 目录常通过链接放在 `.claude\skills` 下，仓库根目录用下面的命令解析：
 
-  ```
-  python -c "import os,sys; print(os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[1]))))" "<skill 目录>"
-  ```
-- 命令行工具：`python "<仓库根目录>\planner_cli.py"`，下文简写为 `planner_cli`。需要 Python 3.11 和 `requirements.txt` 里的依赖
-- 数据目录：用 `planner_cli paths` 查看，默认 `%APPDATA%\StudyPlanner`
+     ```
+     python -c "import os,sys; print(os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[1]))))" "<skill 目录>"
+     ```
+- 数据目录：用 `planner_cli paths` 查看。命令行工具按“环境变量 `STUDY_PLANNER_HOME` > `app.json` 记录的数据目录 > `%APPDATA%\StudyPlanner`”的顺序决定，和正在运行的计划本一致
   - `profile.json`：空闲时间，skill 和 App 都可以改
   - `plans\<id>.md`：计划文件，一个计划一个文件，App 每 5 秒检查一次并自动加载
   - `tasks.json`：一次性临时任务，用 `planner_cli add-task` 写入，不要手动编辑
@@ -26,7 +28,7 @@ description: 为计划本 App 生成和调整个人计划，并写入 App 自动
 - 反问清单：[references/intake-questions.md](references/intake-questions.md)
 - 个人环境的补充说明：`references/local/` 下的文件（例如读取外部学习 App 进度的方法）。这个文件夹不在仓库中，存在时先读
 
-草稿和备份放在会话的临时目录（scratchpad），没有时用 `%TEMP%`。不要放进 `<仓库根目录>`，那里是 git 仓库。
+草稿和备份放在会话的临时目录（scratchpad），没有时用 `%TEMP%`。不要放进计划本的数据目录或源码仓库。
 
 ## 判断请求类型
 

@@ -1,6 +1,6 @@
 # 计划文件格式
 
-计划文件是 Markdown。正文写给人看，机器读取的部分放在唯一一个 ```` ```study-plan ```` 代码块里（代码块名称固定，长期和短期计划都用它），内容是 JSON。示例在 `<仓库根目录>\examples\`：
+计划文件是 Markdown。正文写给人看，机器读取的部分放在唯一一个 ```` ```study-plan ```` 代码块里（代码块名称固定，长期和短期计划都用它），内容是 JSON。示例在 study-planner 仓库的 `examples/`（https://github.com/ryukirin/study-planner/tree/main/examples）：
 
 - `toeic-700-sample.md`、`java-basics-sample.md`：长期计划
 - `weekend-shopping-sample.md`：只有定时安排的短期计划
@@ -139,7 +139,7 @@
 写完草稿运行：
 
 ```
-python "<仓库根目录>\planner_cli.py" check <草稿1> [<草稿2> ...]
+planner_cli check <草稿1> [<草稿2> ...]
 ```
 
 可以一次传多份草稿，按全部加入后的状态一起检查。草稿和已有计划 id 相同时按替换处理，两份草稿 id 相同会报错。`--from YYYY-MM-DD --days N` 可以预览任意日期，用来抽查休馆日、考试日、祝日的安排。

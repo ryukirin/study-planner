@@ -43,6 +43,7 @@ const ICONS = {
   layers: '<path d="M12 3l9 5-9 5-9-5 9-5z"/><path d="M3 13l9 5 9-5"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>',
   refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -884,6 +885,13 @@ document.addEventListener('click', async (event) => {
     else if (res.warning) toast(res.warning, true);
     else toast(res.message || '已发送测试通知');
   } else if (action === 'open-notify-settings') report(await call('open_notification_settings'));
+  else if (action === 'install-skill') {
+    const res = await call('install_skill');
+    if (!res.ok && res.error) { toast(res.error, true); return; }
+    S.skillResults = res.results;
+    toast(res.ok ? 'skill 已安装' : '部分位置安装失败', !res.ok);
+    await refresh();
+  }
   else if (action === 'open-data-dir') report(await call('open_data_dir'));
 });
 
@@ -1144,9 +1152,30 @@ function settingsView() {
       ${row('关闭窗口时缩到托盘', '缩到右下角托盘后提醒照常发送。关闭这个选项后，关闭窗口即退出，不再提醒。', toggle('app.close_to_tray'))}
       ${row('开机自动启动', autostartDesc, toggle('app.autostart', !app.autostart_supported))}
     </div>
+    ${skillPanel(app)}
     <div class="card panel">
       <div class="panel-head"><h3>数据</h3><button class="btn sm" data-action="open-data-dir">${icon('folder', 'sm')}打开数据目录</button></div>
       <div class="set-desc num">${esc(S.state.home)}</div>
+      <div class="set-desc" style="margin-top:6px">计划本 ${esc(app.version || '')}</div>
+    </div>`;
+}
+
+function skillPanel(app) {
+  const skill = app.skill;
+  if (!skill) return '';
+  const names = { installed: '已安装', outdated: '可更新', missing: '未安装', linked: '链接' };
+  const rows = skill.targets.map((t) => `
+    <div class="set-row"><div class="set-text"><div class="set-label">${esc(t.label)}</div><div class="set-desc num">${esc(t.target)}</div></div>
+      <div class="set-control"><span class="chip${t.state === 'installed' || t.state === 'linked' ? '' : ' warn'}" title="${esc(t.detail)}">${names[t.state] || esc(t.state)}</span></div></div>`).join('');
+  const results = (S.skillResults || []).map((r) => `<li>${esc(r.message)}</li>`).join('');
+  const canInstall = app.tray && skill.available;
+  return `
+    <div class="card panel">
+      <div class="panel-head"><h3>plan-builder skill</h3><button class="btn sm" data-action="install-skill" ${canInstall ? '' : 'disabled'}>${icon('download', 'sm')}安装或更新</button></div>
+      <div class="set-desc">在 Claude Code 或 Codex 里用对话生成和调整计划，写入后计划本自动加载。安装后重新打开 Claude Code 或 Codex 生效。已经是链接的位置不会被覆盖。</div>
+      ${rows}
+      ${results ? `<ul class="set-desc" style="margin-top:8px">${results}</ul>` : ''}
+      ${app.tray ? '' : '<div class="set-desc" style="margin-top:8px">当前在浏览器预览中运行，安装只在桌面窗口中可用。</div>'}
     </div>`;
 }
 

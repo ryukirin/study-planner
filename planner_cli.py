@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import date, timedelta
 
+from planner_core import paths
 from planner_core.availability import format_time
 from planner_core.jp_holidays import holidays_between
 from planner_core.plan_spec import WEEK_KEYS, WEEKDAY_CN, PlanError, format_date, load_plan_file, parse_date, weekday_cn
@@ -90,8 +92,12 @@ def print_day(ws: Workspace, day: date, indent: str = "  ") -> None:
         print(f"{indent}里程碑  [{plan.name}] {milestone.text}")
 
 
-def cmd_paths(ws: Workspace, _args) -> int:
+def cmd_paths(ws: Workspace, args) -> int:
     print(f"数据目录：{ws.home}")
+    if not args.home and not os.environ.get(paths.ENV_HOME):
+        info = paths.read_app_info()
+        source = "App 记录" if info.get("home") and os.path.abspath(info["home"]) == ws.home else "默认位置"
+        print(f"数据目录来源：{source}（App 记录文件 {paths.app_info_path()}{'' if info else '，不存在'}）")
     print(f"计划文件夹：{ws.plans_dir}")
     print(f"空闲时间：{ws.profile_path}")
     print(f"完成记录：{ws.progress_path}")
@@ -306,7 +312,7 @@ def cmd_delete_task(ws: Workspace, args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="计划本命令行工具")
-    parser.add_argument("--home", help="数据目录，默认 %%APPDATA%%\\StudyPlanner，也可用环境变量 STUDY_PLANNER_HOME")
+    parser.add_argument("--home", help="数据目录。不写时依次使用环境变量 STUDY_PLANNER_HOME、App 记录的数据目录（%%APPDATA%%\\StudyPlanner\\app.json）、%%APPDATA%%\\StudyPlanner")
     parser.add_argument("--today", type=_date_arg, default=date.today(), help="把某天当作今天，默认是系统日期")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("paths", help="打印数据目录和各文件路径")
@@ -334,7 +340,7 @@ def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     args = build_parser().parse_args(argv)
-    ws = Workspace(args.home)
+    ws = Workspace(args.home or paths.data_home(use_app_info=True))
     handler = {"paths": cmd_paths, "check": cmd_check, "status": cmd_status, "add-task": cmd_add_task,
                "tasks": cmd_tasks, "delete-task": cmd_delete_task}[args.command]
     return handler(ws, args)
