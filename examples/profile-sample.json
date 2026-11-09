@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "buffer_minutes": 5,
+  "weekly": {
+    "mon": [
+      {"start": "07:40", "end": "08:20", "tag": "commute", "label": "上班通勤"},
+      {"start": "18:30", "end": "19:10", "tag": "commute", "label": "下班通勤"},
+      {"start": "20:30", "end": "22:30", "tag": "focus", "label": "晚上"}
+    ],
+    "tue": [
+      {"start": "07:40", "end": "08:20", "tag": "commute", "label": "上班通勤"},
+      {"start": "18:30", "end": "19:10", "tag": "commute", "label": "下班通勤"},
+      {"start": "20:30", "end": "22:30", "tag": "focus", "label": "晚上"}
+    ],
+    "wed": [
+      {"start": "07:40", "end": "08:20", "tag": "commute", "label": "上班通勤"},
+      {"start": "18:30", "end": "19:10", "tag": "commute", "label": "下班通勤"},
+      {"start": "20:30", "end": "22:30", "tag": "focus", "label": "晚上"}
+    ],
+    "thu": [
+      {"start": "07:40", "end": "08:20", "tag": "commute", "label": "上班通勤"},
+      {"start": "18:30", "end": "19:10", "tag": "commute", "label": "下班通勤"},
+      {"start": "20:30", "end": "22:30", "tag": "focus", "label": "晚上"}
+    ],
+    "fri": [
+      {"start": "07:40", "end": "08:20", "tag": "commute", "label": "上班通勤"},
+      {"start": "18:30", "end": "19:10", "tag": "commute", "label": "下班通勤"},
+      {"start": "20:30", "end": "22:30", "tag": "focus", "label": "晚上"}
+    ],
+    "sat": [
+      {"start": "09:30", "end": "11:30", "tag": "focus", "label": "上午"},
+      {"start": "14:00", "end": "17:00", "tag": "focus", "label": "下午"}
+    ],
+    "sun": [
+      {"start": "15:00", "end": "16:00", "tag": "light", "label": "下午"}
+    ]
+  },
+  "exceptions": [
+    {"date": "2026-12-31", "windows": [], "note": "跨年休息"}
+  ]
+}
