@@ -1772,6 +1772,11 @@ async function boot() {
       if (kind === 'win') windowDialog(key, index === undefined ? undefined : Number(index));
       if (kind === 'ex') exceptionDialog(key === undefined ? undefined : Number(key));
       if (kind === 'task') taskDialog();
+      // 截图用：detail:序号 打开当天第几个任务的详情，replan 和 close 打开对应的对话框，focus 开始整页专注
+      if (kind === 'detail') taskDetailDialog(shownTasks()[Number(key) || 0]);
+      if (kind === 'replan') replanAllDialog();
+      if (kind === 'close') window.askClose();
+      if (kind === 'focus') { setPomo(await call('pomodoro_start', key || null)); render(); }
     }
     if (DEV && params.get('scroll')) $('#main').scrollTop = Number(params.get('scroll'));
   } catch (error) {

@@ -52,7 +52,7 @@ Windows 桌面计划 App。读取 Markdown 格式的计划文件，按每天的�
 
 ![空闲时间](docs/screenshots/profile.png)
 
-界面、提醒、番茄钟和排程规则的详细说明见 [使用说明.md](使用说明.md)。
+第一次使用的步骤和常用操作见 [使用说明](使用说明.md)，各项功能的详细规则见 [功能细节和排程规则](docs/排程规则.md)。
 
 ## 卸载
 
@@ -142,6 +142,14 @@ build_exe.bat
 ```bat
 python -m unittest discover -s tests -t .
 ```
+
+在浏览器里预览界面：
+
+```bat
+python tools\dev_server.py --home <测试数据目录> [--today 2026-11-12] [--time 21:30]
+```
+
+打开 http://127.0.0.1:8765/ 。`--home` 指向测试数据目录，真实数据不受影响。浏览器预览中没有托盘和系统通知。
 
 ## 已知限制
 
