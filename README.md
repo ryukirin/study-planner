@@ -40,6 +40,10 @@ Windows 桌面计划 App。读取 Markdown 格式的计划文件，按每天的�
 
 ## 界面
 
+日程页可以按日、周、月查看。周视图一天一列，可以直接勾选完成，点任务打开详情。
+
+![周视图](docs/screenshots/week.png)
+
 计划页：每个计划的完成度、阶段、里程碑和内容进度，卡片可以折叠。
 
 ![计划](docs/screenshots/plans.png)

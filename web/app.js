@@ -1765,6 +1765,7 @@ async function boot() {
   try {
     const params = new URLSearchParams(location.search);
     if (DEV && params.get('view')) S.view = params.get('view');
+    if (DEV && ['day', 'week', 'month'].includes(params.get('span'))) S.span = params.get('span');
     await refresh(DEV ? params.get('date') || undefined : undefined);
     if (DEV && params.get('dialog')) {
       const [kind, key, index] = params.get('dialog').split(':');
