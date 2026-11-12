@@ -24,7 +24,9 @@ def task_spans(plan: Plan, expansion: Expansion | None = None) -> list[tuple[dat
     expansion = expansion or expand_plan(plan)
     spans = []
     for phase in plan.phases:
-        days = [day for day in expansion.by_date if phase.start <= day <= phase.end]
+        # 在 App 里改期的任务按原定日期算，核对的是计划文件本身
+        planned = {session.moved_from or session.day for session in expansion.all_sessions()}
+        days = [day for day in planned if phase.start <= day <= phase.end]
         spans.append((min(days), max(days)) if days else (phase.start, phase.end))
     return spans
 

@@ -16,19 +16,20 @@ import webbrowser
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
-from planner_core import paths
+from planner_core import paths, updater
 from planner_core.availability import ProfileError, parse_profile
 from planner_core.paths import resource_path
-from planner_core.plan_spec import parse_date
+from planner_core.plan_spec import format_date, parse_date, weekday_cn
 from planner_core.pomodoro import Pomodoro
 from planner_core.reminders import due_reminders
 from planner_core.settings import SettingsError
 from planner_core.tasks import TaskError
-from planner_core.view_model import build_state, find_session
+from planner_core.timeutil import format_time, parse_time
+from planner_core.view_model import build_state, find_session, range_payload
 from planner_core.workspace import Workspace, WorkspaceError
 
 APP_TITLE = "计划本"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 PROFILE_FIELDS = ("version", "buffer_minutes", "weekly", "exceptions", "holidays", "holiday")
 SHORTCUT_NAME = "计划本.lnk"
 SKILL_NAME = "plan-builder"
@@ -87,6 +88,27 @@ def copy_skill(source: str, target: str) -> None:
 
 def startup_folder() -> str:
     return os.path.join(os.environ.get("APPDATA", ""), "Microsoft", "Windows", "Start Menu", "Programs", "Startup")
+
+
+def can_self_update() -> bool:
+    """只有打包后的 exe 可以替换自己。"""
+    return sys.platform == "win32" and bool(getattr(sys, "frozen", False))
+
+
+def wait_for_process(pid: int, seconds: float = 30) -> None:
+    """等指定的进程退出，最多等 seconds 秒。更新后的新进程用它等旧进程退出，避免单实例检查失败。"""
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE
+    if not handle:
+        return
+    try:
+        kernel32.WaitForSingleObject(handle, int(seconds * 1000))
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def autostart_supported() -> bool:
@@ -152,9 +174,11 @@ def windows_toasts_enabled() -> bool | None:
 class PlannerApi:
     """暴露给前端的接口。pywebview 和开发用 HTTP 服务器共用这一个类。"""
 
-    def __init__(self, home: str | None = None, today: date | None = None) -> None:
+    def __init__(self, home: str | None = None, today: date | None = None, clock: int | None = None) -> None:
+        """today 和 clock（当天的分钟数）用来在测试和预览里固定“今天”和“现在”。"""
         self._lock = threading.RLock()
         self._today_override = today
+        self._clock_override = clock
         self._ws = Workspace(home)
         self._fingerprint = self._ws.fingerprint()
         self._pomodoro = Pomodoro(lambda: self._ws.settings["pomodoro"])
@@ -166,6 +190,12 @@ class PlannerApi:
         self._ui_changes = 0  # 托盘菜单改了状态（完成任务、番茄钟等）时加一，前端轮询到后刷新
         self._seen_ui_changes = 0
         self._mute_until: datetime | None = None  # 暂停任务提醒到这个时间，番茄钟提醒不受影响
+        # 更新：检查结果、下载进度。_quit 由桌面窗口设置，安装更新后用它退出旧进程
+        self._update: dict[str, Any] | None = None
+        self._update_job: dict[str, Any] = {"stage": "idle"}
+        self._update_lock = threading.Lock()
+        self._quit: Callable[[], None] | None = None
+        self._hide: Callable[[], None] | None = None  # 桌面窗口设置，缩到托盘
 
     # ----- 内部 -----
 
@@ -227,8 +257,18 @@ class PlannerApi:
             state["pomodoro"] = self._pomodoro.snapshot()
             state["app"] = {"autostart_supported": autostart_supported(), "autostart_enabled": autostart_enabled(),
                             "tray": self._notifier is not None, "notifications_enabled": windows_toasts_enabled(),
-                            "version": APP_VERSION, "skill": self.skill_status()}
+                            "version": APP_VERSION, "skill": self.skill_status(),
+                            "can_update": can_self_update(), "update": self._update_public()}
             return state
+
+    def range_days(self, start: str, days: int) -> dict[str, Any]:
+        """周视图和月视图的数据：从 start 起连续 days 天的任务。"""
+        with self._lock:
+            try:
+                first, count = parse_date(start), int(days)
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "日期格式不对"}
+            return {"ok": True, "days": range_payload(self._ws, first, count, self._today())}
 
     def poll(self) -> dict[str, Any]:
         """计划文件夹、profile 或临时任务被外部修改时重新加载。顺带返回番茄钟状态。"""
@@ -311,9 +351,188 @@ class PlannerApi:
             if session is None:
                 return {"ok": False, "error": "找不到这个任务，计划文件可能刚被修改，请刷新后再试。"}
             try:
-                self._ws.set_done(session, bool(done))
+                shifted = self._ws.set_done(session, bool(done), self._clock(None))
             except OSError as exc:
                 return {"ok": False, "error": f"保存完成记录失败：{exc}"}
+            self._after_write()
+            # shifted：提前完成时跟着前移的任务数，取消完成时移回的任务数
+            return {"ok": True, "shifted": shifted} if shifted else {"ok": True}
+
+    def move_session(self, uid: str, window_start: str, index: int) -> dict[str, Any]:
+        """日程页拖动任务：放到当天 window_start 开始的空闲时间段里的第 index 个位置（只数非定时任务）。"""
+        with self._lock:
+            session = find_session(self._ws, uid)
+            if session is None:
+                return {"ok": False, "error": "找不到这个任务，计划文件可能刚被修改，请刷新后再试。"}
+            try:
+                changed = self._ws.move_session(session, parse_time(window_start), int(index))
+            except (TypeError, ValueError) as exc:
+                return {"ok": False, "error": str(exc)}
+            except OSError as exc:
+                return {"ok": False, "error": f"保存排序失败：{exc}"}
+            self._after_write()
+            return {"ok": True, "changed": changed}
+
+    def _clock(self, now: datetime | None) -> datetime:
+        """当前时刻。日期用 _today()，这样测试和预览里指定的“今天”也生效。"""
+        now = now or datetime.now()
+        moment = now.time()
+        if self._clock_override is not None:
+            moment = moment.replace(hour=self._clock_override // 60, minute=self._clock_override % 60)
+        return datetime.combine(self._today(), moment)
+
+    def finish_and_replan(self, uid: str, now: datetime | None = None) -> dict[str, Any]:
+        """标记完成并记下当前时间。任务在今天时，今天还没做的任务从现在起重排。"""
+        with self._lock:
+            session = find_session(self._ws, uid)
+            if session is None:
+                return {"ok": False, "error": "找不到这个任务，计划文件可能刚被修改，请刷新后再试。"}
+            moment = self._clock(now)
+            try:
+                self._ws.set_done(session, True, moment)
+                replanned = session.day == self._today()
+                if replanned:
+                    self._ws.set_replan(session.day, moment.hour * 60 + moment.minute)
+            except OSError as exc:
+                return {"ok": False, "error": f"保存失败：{exc}"}
+            self._after_write()
+            return {"ok": True, "replanned": replanned, "time": moment.strftime("%H:%M")}
+
+    def postpone_session(self, uid: str, now: datetime | None = None) -> dict[str, Any]:
+        """把任务排到后一天。已经过期的任务排到今天。涉及今天时，今天还没做的任务从现在起重排。"""
+        with self._lock:
+            session = find_session(self._ws, uid)
+            if session is None:
+                return {"ok": False, "error": "找不到这个任务，计划文件可能刚被修改，请刷新后再试。"}
+            today = self._today()
+            target = today if session.day < today else session.day + timedelta(days=1)
+            return self._move_to(session, target, now)
+
+    def restore_session_day(self, uid: str, now: datetime | None = None) -> dict[str, Any]:
+        """把改期的任务移回原定日期。"""
+        with self._lock:
+            session = find_session(self._ws, uid)
+            if session is None or session.moved_from is None:
+                return {"ok": False, "error": "这个任务没有改期。"}
+            return self._move_to(session, session.moved_from, now)
+
+    def _move_to(self, session: Any, target: date, now: datetime | None) -> dict[str, Any]:
+        source, today, moment = session.day, self._today(), self._clock(now)
+        try:
+            moved = self._ws.move_session_to_day(session, target)
+            if today in (source, target):
+                self._ws.set_replan(today, moment.hour * 60 + moment.minute)
+        except (WorkspaceError, TaskError) as exc:
+            return {"ok": False, "error": str(exc)}
+        except OSError as exc:
+            return {"ok": False, "error": f"保存失败：{exc}"}
+        self._after_write()
+        placement = next((item for item in self._ws.layout(target).placed if item.session.uid == moved.uid), None)
+        return {
+            "ok": True, "uid": moved.uid, "date": format_date(target), "weekday": weekday_cn(target),
+            "start": format_time(placement.start) if placement else None,
+            "end": format_time(placement.end) if placement else None,
+        }
+
+    def replan_all(self, pull: bool = True, now: datetime | None = None) -> dict[str, Any]:
+        """从现在起重新安排所有没做的任务的日期。pull 为 False 时只往后排，不提前。"""
+        with self._lock:
+            moment = self._clock(now)
+            try:
+                result = self._ws.replan_all(self._today(), moment.hour * 60 + moment.minute, bool(pull))
+            except OSError as exc:
+                return {"ok": False, "error": f"保存失败：{exc}"}
+            self._after_write()
+            return {"ok": True, "time": moment.strftime("%H:%M"), **result}
+
+    def restore_all_days(self) -> dict[str, Any]:
+        """取消所有改期，任务回到原定日期。"""
+        with self._lock:
+            try:
+                restored = self._ws.restore_all_days()
+            except OSError as exc:
+                return {"ok": False, "error": f"保存失败：{exc}"}
+            self._after_write()
+            return {"ok": True, "restored": restored}
+
+    # ----- 更新 -----
+
+    def _update_public(self) -> dict[str, Any] | None:
+        if self._update is None:
+            return None
+        info = {key: value for key, value in self._update.items() if key != "asset"}
+        info["has_asset"] = self._update.get("asset") is not None
+        return info
+
+    def check_update(self) -> dict[str, Any]:
+        """读取 GitHub 上最新的正式版，和当前版本比较。"""
+        try:
+            info = updater.release_info(updater.fetch_latest(), APP_VERSION)
+        except updater.UpdateError as exc:
+            return {"ok": False, "error": str(exc)}
+        info["checked"] = datetime.now().strftime("%H:%M")
+        with self._lock:
+            first = self._update is None or self._update.get("latest") != info["latest"]
+            self._update = info
+            if first and info["newer"]:
+                self._ui_changes += 1  # 侧栏的“设置”显示有新版本
+        return {"ok": True, **self._update_public()}
+
+    def start_update(self) -> dict[str, Any]:
+        """在后台下载新版本。进度用 update_status 查询。"""
+        if not can_self_update():
+            return {"ok": False, "error": "只有打包后的 exe 可以自动更新"}
+        info = self._update
+        if not info or not info.get("newer") or not info.get("asset"):
+            return {"ok": False, "error": "没有可以下载的新版本，请先检查更新"}
+        with self._update_lock:
+            if self._update_job["stage"] == "downloading":
+                return {"ok": True, **self._update_job}
+            self._update_job = {"stage": "downloading", "version": info["latest"], "received": 0, "total": info["asset"]["size"]}
+        threading.Thread(target=self._download_update, args=(info,), daemon=True).start()
+        return {"ok": True, **self._update_job}
+
+    def _download_update(self, info: dict[str, Any]) -> None:
+        def progress(received: int, total: int) -> None:
+            self._update_job.update(received=received, total=total or self._update_job["total"])
+
+        dest = os.path.join(self._ws.home, "updates", info["latest"])
+        try:
+            files = updater.download(info["asset"], dest, progress)
+        except updater.UpdateError as exc:
+            self._update_job = {"stage": "error", "version": info["latest"], "error": str(exc)}
+            return
+        self._update_job = {"stage": "ready", "version": info["latest"], "files": files}
+
+    def update_status(self) -> dict[str, Any]:
+        job = {key: value for key, value in self._update_job.items() if key != "files"}
+        return {"ok": True, **job}
+
+    def install_update(self) -> dict[str, Any]:
+        """用下载好的新版本替换 exe，启动新版本后退出当前进程。"""
+        job = self._update_job
+        if job.get("stage") != "ready" or not can_self_update():
+            return {"ok": False, "error": "新版本还没有下载完成"}
+        try:
+            exe = updater.install(job["files"], os.path.dirname(sys.executable))
+            subprocess.Popen([exe, "--wait-pid", str(os.getpid())], close_fds=True,
+                             creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+        except (updater.UpdateError, OSError) as exc:
+            return {"ok": False, "error": str(exc)}
+        if self._quit is not None:
+            threading.Timer(0.5, self._quit).start()  # 先把结果返回给界面，再退出
+        return {"ok": True}
+
+    def reset_day_order(self, selected: str) -> dict[str, Any]:
+        """删除某一天的手动排序和重排时刻，回到自动排程。"""
+        with self._lock:
+            try:
+                self._ws.reset_day_order(parse_date(selected))
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "日期格式不对"}
+            except OSError as exc:
+                return {"ok": False, "error": f"保存排序失败：{exc}"}
+            self._after_write()
             return {"ok": True}
 
     def save_profile(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -371,6 +590,22 @@ class PlannerApi:
             return {"ok": True}
 
     # ----- 设置 -----
+
+    def close_choice(self, action: str) -> dict[str, Any]:
+        """关闭窗口时的询问：记住选择，以后不再询问，然后缩到托盘或退出。"""
+        if action not in ("tray", "quit"):
+            return {"ok": False, "error": "未知的操作"}
+        with self._lock:
+            data = json.loads(json.dumps(self._ws.settings))
+            data["app"]["close_action"] = action
+            try:
+                self._ws.save_settings(data)
+            except (SettingsError, OSError) as exc:
+                return {"ok": False, "error": f"保存失败：{exc}"}
+        callback = self._hide if action == "tray" else self._quit
+        if callback is not None:
+            threading.Timer(0.2, callback).start()  # 先把结果返回给界面
+        return {"ok": True}
 
     def save_settings(self, data: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
@@ -596,7 +831,6 @@ class DesktopRuntime:
         self.window = None
         self.icon = None
         self.quitting = False
-        self.hint_shown = False
         self.tray_status: dict[str, Any] = {}
 
     def notify(self, title: str, message: str) -> None:
@@ -691,16 +925,35 @@ class DesktopRuntime:
         if self.window is not None:
             self.window.destroy()
 
+    def hide(self) -> None:
+        if self.window is not None:
+            self.window.hide()
+
     def on_closing(self) -> bool:
-        if self.quitting or not self.api._ws.settings["app"]["close_to_tray"]:
+        """点窗口的关闭按钮。按设置缩到托盘或退出，没有选过时在界面里询问一次。"""
+        if self.quitting:
             return True
-        self.window.hide()
-        if not self.hint_shown:
-            self.hint_shown = True
-            self.notify("计划本仍在运行", "已缩到右下角托盘，提醒会照常发送。在托盘菜单里选“退出”可以完全关闭。")
+        action = self.api._ws.settings["app"]["close_action"]
+        if action == "quit":
+            return True  # 窗口关闭后 main 停止托盘图标
+        if action == "tray":
+            self.window.hide()
+            return False
+        threading.Thread(target=self._ask_close, daemon=True).start()  # evaluate_js 不能在关闭事件里同步等待
         return False
 
+    def _ask_close(self) -> None:
+        try:
+            shown = self.window.evaluate_js("window.askClose ? window.askClose() : false")
+        except Exception:  # 界面还没加载完时缩到托盘
+            shown = False
+        if not shown:
+            self.window.hide()
+
     def background_loop(self) -> None:
+        if self.api._ws.settings["app"]["check_updates"] and can_self_update():
+            # 启动后在后台检查一次更新，失败时不提示
+            threading.Timer(15, self.api.check_update).start()
         while not self.quitting:
             try:
                 self.api.background_tick()
@@ -724,6 +977,13 @@ def main() -> None:
         import webview
 
         background = "--background" in sys.argv
+        if "--wait-pid" in sys.argv:
+            try:
+                wait_for_process(int(sys.argv[sys.argv.index("--wait-pid") + 1]))
+            except (IndexError, ValueError):
+                pass
+        if can_self_update():
+            updater.cleanup_old(os.path.dirname(sys.executable))
         home = paths.data_home()
         instance = SingleInstance(home)
         if not instance.is_first:
@@ -736,6 +996,8 @@ def main() -> None:
             traceback.print_exc()
         runtime = DesktopRuntime(api)
         api._notifier = runtime.notify
+        api._quit = runtime.quit
+        api._hide = runtime.hide
         if autostart_supported() and api._ws.settings["app"]["autostart"] and not autostart_enabled():
             try:
                 set_autostart(True)

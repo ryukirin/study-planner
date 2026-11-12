@@ -75,3 +75,9 @@ class ProgressStore:
 
     def focus_count(self, uid: str) -> int:
         return sum(1 for item in self.focus_log if item.get("uid") == uid)
+
+    def focus_minutes(self, uid: str) -> int:
+        return sum(item.get("minutes", 0) for item in self.focus_log if item.get("uid") == uid)
+
+    def done_at(self, uid: str) -> str | None:
+        return self.records.get(uid, {}).get("done_at")

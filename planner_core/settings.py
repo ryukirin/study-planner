@@ -11,8 +11,10 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "reminders": {"timed": True, "timed_lead": 10, "task_start": True, "daily_summary": True,
                   "summary_time": "08:00", "pomodoro": True, "sound": True},
     "pomodoro": {"focus": 25, "short_break": 5, "long_break": 15, "long_every": 4, "full_page": True},
-    "app": {"close_to_tray": True, "autostart": True},
+    "app": {"close_action": "ask", "autostart": True, "check_updates": True},
 }
+
+CLOSE_ACTIONS = ("ask", "tray", "quit")  # 点窗口的关闭按钮时：询问、缩到托盘、退出
 
 # 字段类型和取值范围：bool，(int, 最小, 最大)，"time"
 RULES: dict[str, dict[str, Any]] = {
@@ -20,12 +22,13 @@ RULES: dict[str, dict[str, Any]] = {
                   "summary_time": "time", "pomodoro": bool, "sound": bool},
     "pomodoro": {"focus": (int, 1, 180), "short_break": (int, 1, 60), "long_break": (int, 1, 120), "long_every": (int, 1, 12),
                  "full_page": bool},
-    "app": {"close_to_tray": bool, "autostart": bool},
+    "app": {"close_action": ("choice", CLOSE_ACTIONS), "autostart": bool, "check_updates": bool},
 }
 
 LABELS = {
     "timed_lead": "定时任务提前提醒分钟数", "summary_time": "当日概览时间", "focus": "专注分钟数",
     "short_break": "短休息分钟数", "long_break": "长休息分钟数", "long_every": "几次专注后长休息",
+    "close_action": "点关闭按钮时",
 }
 
 
@@ -46,6 +49,9 @@ def validate_settings(data: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(values, dict):
             errors.append(f"{section}：必须是对象")
             continue
+        if section == "app" and "close_action" not in values and values.get("close_to_tray") is False:
+            # 旧版本的“关闭窗口时缩到托盘”被关掉时，等同于点关闭按钮退出。开着时是默认值，改为先询问
+            values = {**values, "close_action": "quit"}
         for key, rule in rules.items():
             if key not in values:
                 continue
@@ -54,6 +60,10 @@ def validate_settings(data: Any) -> dict[str, dict[str, Any]]:
             if rule is bool:
                 if not isinstance(value, bool):
                     errors.append(f"{section}.{key}：必须是 true 或 false")
+                    continue
+            elif isinstance(rule, tuple) and rule[0] == "choice":
+                if value not in rule[1]:
+                    errors.append(f"{label}：必须是 {'、'.join(rule[1])} 之一")
                     continue
             elif rule == "time":
                 try:

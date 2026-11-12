@@ -93,6 +93,10 @@ def settings_path(home: str) -> str:
     return os.path.join(home, "settings.json")
 
 
+def day_order_path(home: str) -> str:
+    return os.path.join(home, "day_order.json")
+
+
 def archive_dir(home: str) -> str:
     return os.path.join(plans_dir(home), "archive")
 

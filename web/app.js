@@ -55,7 +55,7 @@ const ICONS = {
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   timer: '<circle cx="12" cy="13.5" r="7.5"/><path d="M12 10v3.5l2.5 1.5M9.5 2.5h5M12 2.5V6"/>',
-  gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5l1.6 2.6 3-.6.9 2.9 2.9.9-.6 3 2.6 1.7-2.6 1.6.6 3-2.9.9-.9 2.9-3-.6L12 21.5l-1.6-2.6-3 .6-.9-2.9-2.9-.9.6-3L1.6 12l2.6-1.6-.6-3 2.9-.9.9-2.9 3 .6z"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M10.14 5.05L10.66 2.49L13.34 2.49L13.86 5.05L15.6 5.76L17.78 4.33L19.67 6.22L18.24 8.4L18.95 10.14L21.51 10.66L21.51 13.34L18.95 13.86L18.24 15.6L19.67 17.78L17.78 19.67L15.6 18.24L13.86 18.95L13.34 21.51L10.66 21.51L10.14 18.95L8.4 18.24L6.22 19.67L4.33 17.78L5.76 15.6L5.05 13.86L2.49 13.34L2.49 10.66L5.05 10.14L5.76 8.4L4.33 6.22L6.22 4.33L8.4 5.76Z"/>',
   pin: '<path d="M12 21s-6.5-5.6-6.5-11A6.5 6.5 0 0 1 18.5 10c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/>',
   link: '<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
@@ -68,12 +68,23 @@ const ICONS = {
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/>',
   shrink: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
   grow: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  close: '<path d="M6 6l12 12M18 6L6 18"/>',
 };
+const GRIP_SVG = '<svg viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/><circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/><circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/></svg>';
 const icon = (name, cls = '') => `<svg class="svg ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
 
 /* ---------- 状态 ---------- */
 /* pomoLayout：null 按设置决定，'full' 整页，'mini' 右下角卡片。只在当前这一轮番茄钟内有效 */
-const S = { state: null, view: 'day', calMonth: null, busy: false, pomo: null, pomoLayout: null, collapsed: loadCollapsed() };
+/* span：日程页显示一天、一周还是一个月。range：周视图和月视图的数据 { start, days } */
+const S = { state: null, view: 'day', span: loadSpan(), range: null, calMonth: null, busy: false, pomo: null, pomoLayout: null, collapsed: loadCollapsed() };
+
+function loadSpan() {
+  try { const span = localStorage.getItem('planner.span'); return ['week', 'month'].includes(span) ? span : 'day'; } catch { return 'day'; }
+}
+function setSpan(span) {
+  S.span = span;
+  try { localStorage.setItem('planner.span', span); } catch { /* 忽略 */ }
+}
 
 /* 计划卡片的折叠状态，按计划 id 记在浏览器存储里。存储不可用时只在本次运行中记住。 */
 function loadCollapsed() {
@@ -86,9 +97,37 @@ function saveCollapsed() {
 async function refresh(selected) {
   const target = selected ?? (S.state ? S.state.selected : null);
   S.state = await call('state', target);
+  await loadRange();
   setPomo(S.state.pomodoro);
   if (!S.calMonth || selected) S.calMonth = S.state.selected.slice(0, 7);
   render();
+}
+
+/* 周视图取所选日期所在的周一到周日，月视图取覆盖整个月的完整几周 */
+function weekStart(text) { return addDays(text, -((parseDate(text).getDay() + 6) % 7)); }
+function spanRange(selected) {
+  if (S.span === 'week') return [weekStart(selected), 7];
+  const first = parseDate(`${selected.slice(0, 7)}-01`);
+  const start = weekStart(fmtDate(first));
+  const last = fmtDate(new Date(first.getFullYear(), first.getMonth() + 1, 0));
+  return [start, diffDays(weekStart(last), start) + 7];
+}
+async function loadRange() {
+  if (S.span === 'day') { S.range = null; return; }
+  const [start, count] = spanRange(S.state.selected);
+  const res = await call('range_days', start, count);
+  S.range = res.ok ? { start, days: res.days } : null;
+}
+/* 按当前的显示范围前后翻：一天、一周或一个月 */
+function shiftSelected(n) {
+  const st = S.state;
+  if (S.span === 'week') return addDays(st.selected, 7 * n);
+  if (S.span === 'month') {
+    const d = parseDate(st.selected);
+    const first = fmtDate(new Date(d.getFullYear(), d.getMonth() + n, 1));
+    return first.slice(0, 7) === st.today.slice(0, 7) ? st.today : first;
+  }
+  return addDays(st.selected, n);
 }
 
 function setView(view) {
@@ -96,6 +135,31 @@ function setView(view) {
   render();
   $('#main').scrollTop = 0;
 }
+
+const CLOSE_ACTIONS = [['ask', '每次询问'], ['tray', '最小化到托盘'], ['quit', '退出']];
+
+/* 点窗口的关闭按钮且没有选过做法时，桌面窗口通过 evaluate_js 调用。返回 true 表示已经显示询问 */
+window.askClose = () => {
+  if (!S.state) return false;
+  const modal = $('#confirm');
+  if (modal.open) return true;
+  openModal(`
+    <h3>关闭计划本</h3>
+    <div class="desc">选择点关闭按钮时的做法。选好后不再询问，可以在“设置 → 后台运行”里修改。</div>
+    <div class="close-options">
+      <button class="close-option" value="tray">${icon('download', 'sm')}<span><b>最小化到托盘</b><small>窗口隐藏到右下角托盘，提醒和番茄钟照常运行</small></span></button>
+      <button class="close-option" value="quit">${icon('close', 'sm')}<span><b>退出</b><small>完全关闭计划本，不再提醒</small></span></button>
+    </div>
+    <div class="modal-actions"><span class="spacer"></span><button class="btn" value="cancel">取消</button></div>`,
+  async (f, action) => {
+    if (action !== 'tray' && action !== 'quit') return false;
+    const res = await call('close_choice', action);
+    if (!res.ok) { toast(res.error, true); return false; }
+    S.state.settings.app.close_action = action;
+    return true;
+  }, 'confirm');
+  return true;
+};
 
 /* 托盘菜单的“跳转到”通过 evaluate_js 调用。日程页回到今天 */
 window.gotoView = async (view) => {
@@ -116,6 +180,7 @@ function toast(text, isError = false) {
 /* ---------- 渲染入口 ---------- */
 function render() {
   if (!S.state) return;
+  endDrag();
   renderSidebar();
   renderBanner();
   const view = $('#view');
@@ -123,6 +188,7 @@ function render() {
   else if (S.view === 'profile') view.innerHTML = profileView();
   else if (S.view === 'settings') view.innerHTML = settingsView();
   else view.innerHTML = dayView();
+  $('.content').classList.toggle('wide', S.view === 'day' && S.span !== 'day' && Boolean(S.range));
   renderPomodoro();
 }
 
@@ -133,7 +199,7 @@ function renderSidebar() {
     ['day', 'calendar', '日程', st.overdue_total ? `<span class="count num">${st.overdue_total}</span>` : ''],
     ['plans', 'layers', '计划', ''],
     ['profile', 'clock', '空闲时间', ''],
-    ['settings', 'gear', '设置', ''],
+    ['settings', 'gear', '设置', st.app && st.app.update && st.app.update.newer ? '<i class="nav-dot" title="有新版本"></i>' : ''],
   ].map(([key, ic, label, extra]) => `<button class="${S.view === key ? 'active' : ''}" data-action="view" data-view="${key}">${icon(ic)}<span>${label}</span>${extra}</button>`).join('');
 
   const plans = st.plans.length
@@ -185,6 +251,14 @@ function renderBanner() {
 }
 
 /* ---------- 日程 ---------- */
+/* 地点和链接按钮，任务卡片和任务详情共用。type="button" 让它们在弹窗的表单里不触发提交 */
+function locationChip(location) {
+  return `<button type="button" class="link-chip" data-action="open-map" data-q="${esc(location)}" title="在地图中搜索">${icon('pin', 'xs')}${esc(location)}</button>`;
+}
+function linkChip(l) {
+  return `<button type="button" class="link-chip" data-action="open-url" data-url="${esc(l.url)}" title="${esc(l.url)}">${icon('link', 'xs')}${esc(l.title)}</button>`;
+}
+
 function taskHtml(t, opts = {}) {
   const meta = [
     `<span class="plan"><i class="dot"></i>${esc(t.plan_name)}</span>`,
@@ -192,24 +266,25 @@ function taskHtml(t, opts = {}) {
     t.start ? `<span class="num">${t.start}–${t.end}</span>` : '',
     opts.fixedMark && t.fixed ? `<span class="fixed-mark">${icon('clock', 'xs')}定时</span>` : '',
     `<span>${t.minutes} 分钟</span>`,
+    t.moved_from ? `<span class="moved-mark" title="原定 ${monthDay(t.moved_from)} ${esc(t.moved_from_weekday)}">${icon('skip', 'xs')}原定 ${shortDate(t.moved_from)}</span>` : '',
     t.phase ? `<span>${esc(t.phase)}</span>` : '',
     t.focus_count ? `<span class="focus-count" title="已完成的专注次数">${icon('timer', 'xs')}${t.focus_count}</span>` : '',
   ].join('');
-  const extras = [
-    t.location ? `<button class="link-chip" data-action="open-map" data-q="${esc(t.location)}" title="在地图中搜索">${icon('pin', 'xs')}${esc(t.location)}</button>` : '',
-    ...(t.links || []).map((l) => `<button class="link-chip" data-action="open-url" data-url="${esc(l.url)}" title="${esc(l.url)}">${icon('link', 'xs')}${esc(l.title)}</button>`),
-  ].join('');
+  const extras = [t.location ? locationChip(t.location) : '', ...(t.links || []).map(linkChip)].join('');
   const actions = [
     t.done ? '' : `<button class="icon-btn sm" data-action="pomo-start" data-uid="${esc(t.uid)}" title="为这个任务开始专注">${icon('timer', 'sm')}</button>`,
     t.is_task ? `<button class="icon-btn sm" data-action="edit-task" data-id="${esc(t.task_id)}" title="编辑临时任务">${icon('edit', 'sm')}</button>` : '',
   ].join('');
+  const draggable = opts.drag && !t.fixed;
   return `
-    <div class="task${t.done ? ' done' : ''}" style="--c:${esc(t.color)}">
+    <div class="task${t.done ? ' done' : ''}" style="--c:${esc(t.color)}" data-uid="${esc(t.uid)}"${draggable ? ' data-drag="1"' : ''}>
+      ${draggable ? `<span class="grip" title="拖动调整顺序或换时间段">${GRIP_SVG}</span>` : ''}
       <button class="check" data-action="toggle" data-uid="${esc(t.uid)}" data-done="${t.done ? 1 : 0}" title="${t.done ? '取消完成' : '标记完成'}">${icon('check')}</button>
       <div class="task-main">
         <div class="task-title">${esc(t.title)}</div>
         <div class="task-meta">${meta}</div>
         ${extras ? `<div class="task-extras">${extras}</div>` : ''}
+        ${t.reason ? `<div class="task-reason">${icon('alert', 'xs')}${esc(t.reason)}</div>` : ''}
         ${t.detail ? `<div class="task-detail">${esc(t.detail)}</div>` : ''}
       </div>
       ${actions ? `<div class="task-actions">${actions}</div>` : ''}
@@ -223,25 +298,133 @@ function ringHtml(done, total) {
   return `<svg class="ring${total && done === total ? ' complete' : ''}" viewBox="0 0 46 46"><circle class="track" cx="23" cy="23" r="${r}"/><circle class="value" cx="23" cy="23" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - ratio)}"/></svg>`;
 }
 
-function dayView() {
-  const st = S.state;
-  const day = st.day;
-  const isToday = st.selected === st.today;
-  const head = `
+const SPANS = [['day', '日', '天'], ['week', '周', '周'], ['month', '月', '个月']];
+
+/* 日、周、月三种视图共用的头部：标题、添加任务、范围切换、前后翻和回到今天 */
+function scheduleHead(eyebrow, title) {
+  const unit = SPANS.find(([key]) => key === S.span)[2];
+  return `
     <div class="page-head">
       <div>
-        <div class="eyebrow">${relativeLabel(st.selected, st.today)} · ${day.weekday}${day.holiday ? ` · <span class="holiday-name">${esc(day.holiday)}</span>` : ''}</div>
-        <h1 class="page-title">${monthDay(st.selected)}</h1>
+        <div class="eyebrow">${eyebrow}</div>
+        <h1 class="page-title">${title}</h1>
       </div>
       <div class="head-actions">
         <button class="btn primary" data-action="add-task">${icon('plus', 'sm')}添加任务</button>
+        <button class="btn" data-action="replan-all" title="从现在起重新安排所有没做的任务的日期">${icon('refresh', 'sm')}全部重排</button>
+        <div class="seg">${SPANS.map(([key, label]) => `<button data-action="span" data-span="${key}" class="${S.span === key ? 'active' : ''}" title="按${label}查看">${label}</button>`).join('')}</div>
         <div class="seg">
-          <button data-action="shift" data-n="-1" title="前一天（←）">${icon('chevL', 'sm')}</button>
+          <button data-action="shift" data-n="-1" title="前一${unit}（←）">${icon('chevL', 'sm')}</button>
           <button data-action="today" title="回到今天（T）">今天</button>
-          <button data-action="shift" data-n="1" title="后一天（→）">${icon('chevR', 'sm')}</button>
+          <button data-action="shift" data-n="1" title="后一${unit}（→）">${icon('chevR', 'sm')}</button>
         </div>
       </div>
     </div>`;
+}
+
+function unitLabel(n, unit) {
+  if (n === 0) return `<b>本${unit}</b>`;
+  if (n === 1) return unit === '月' ? '下个月' : `下${unit}`;
+  if (n === -1) return unit === '月' ? '上个月' : `上${unit}`;
+  const word = unit === '月' ? '个月' : unit;
+  return n > 0 ? `${n} ${word}后` : `${-n} ${word}前`;
+}
+
+/* 周视图和月视图顶部的汇总 */
+function rangeSummary(days) {
+  const st = S.state;
+  const sum = (key) => days.reduce((n, d) => n + d[key], 0);
+  const total = sum('total');
+  const done = sum('done');
+  const milestones = days.reduce((n, d) => n + d.milestones.length, 0);
+  const chips = [];
+  if (milestones) chips.push(`<span class="chip">${icon('flag', 'sm')}里程碑 ${milestones} 个</span>`);
+  if (st.overdue_total) chips.push(`<button class="chip warn" data-action="goto-today">${icon('alert', 'sm')}逾期 ${st.overdue_total} 项</button>`);
+  if (!total) return chips.length ? `<div class="summary-chips" style="justify-content:flex-start;margin-bottom:18px">${chips.join('')}</div>` : '';
+  return `
+    <div class="card summary">
+      ${ringHtml(done, total)}
+      <div class="summary-main">
+        <strong class="num">${done} / ${total}</strong> 项完成
+        <div class="sub num">已完成 ${hours(sum('done_minutes'))} / ${hours(sum('minutes'))}</div>
+      </div>
+      <div class="summary-chips">${chips.join('')}</div>
+    </div>`;
+}
+
+function miniTime(t) {
+  if (t.early) return '已提前完成';
+  if (t.unplaced) return `未排入 · ${t.minutes} 分钟`;
+  return `${t.start}–${t.end}${t.fixed ? icon('clock', 'xs') : ''}`;
+}
+
+function weekView() {
+  const st = S.state;
+  const days = S.range.days;
+  const first = days[0].date;
+  const last = days[days.length - 1].date;
+  const title = `${monthDay(first)} – ${first.slice(0, 7) === last.slice(0, 7) ? `${parseDate(last).getDate()} 日` : monthDay(last)}`;
+  const head = scheduleHead(unitLabel(Math.round(diffDays(first, weekStart(st.today)) / 7), '周'), title);
+  const cols = days.map((d) => {
+    const tasks = d.tasks.map((t) => `
+        <div class="task-mini${t.done ? ' done' : ''}${t.unplaced ? ' unplaced' : ''}${t.fixed ? ' fixed' : ''}" style="--c:${esc(t.color)}" data-uid="${esc(t.uid)}" title="${esc(t.plan_name)}${t.fixed ? ' · 定时' : ''}${t.moved_from ? ` · 原定 ${shortDate(t.moved_from)}` : ''}">
+          <button class="check" data-action="toggle" data-uid="${esc(t.uid)}" data-done="${t.done ? 1 : 0}" title="${t.done ? '取消完成' : '标记完成'}">${icon('check')}</button>
+          <div class="mini-time num">${miniTime(t)}</div>
+          <div class="mini-title">${esc(t.title)}</div>
+        </div>`).join('');
+    return `
+      <div class="wk-col${d.date === st.today ? ' today' : ''}${d.date < st.today ? ' past' : ''}">
+        <button class="wk-head" data-action="open-day" data-date="${d.date}" title="查看这一天">
+          <span class="wk-wd">${d.weekday}</span><span class="wk-date num">${parseDate(d.date).getDate()}</span>
+          ${d.total ? `<span class="wk-count num${d.done === d.total ? ' all' : ''}">${d.done}/${d.total}</span>` : ''}
+        </button>
+        ${d.holiday ? `<div class="wk-holiday">${esc(d.holiday)}</div>` : ''}
+        ${d.milestones.map((m) => `<div class="wk-ms" style="--c:${esc(m.color)}" title="${esc(m.plan_name)}">${icon('flag', 'xs')}<span>${esc(m.text)}</span></div>`).join('')}
+        ${tasks || '<div class="wk-empty">没有任务</div>'}
+      </div>`;
+  }).join('');
+  return `${head}${rangeSummary(days)}<div class="week">${cols}</div>`;
+}
+
+const MONTH_CELL_LINES = 4;
+
+function monthView() {
+  const st = S.state;
+  const month = st.selected.slice(0, 7);
+  const [year, mon] = month.split('-').map(Number);
+  const [ty, tm] = st.today.split('-').map(Number);
+  const head = scheduleHead(unitLabel((year - ty) * 12 + mon - tm, '月'), `${year} 年 ${mon} 月`);
+  const days = S.range.days;
+  const cells = days.map((d) => {
+    const lines = [
+      ...d.milestones.map((m) => `<div class="mo-ms" style="--c:${esc(m.color)}" title="${esc(m.plan_name)}：${esc(m.text)}">${icon('flag', 'xs')}<span>${esc(m.text)}</span></div>`),
+      ...d.tasks.map((t) => `<div class="mo-task${t.done ? ' done' : ''}" style="--c:${esc(t.color)}" data-uid="${esc(t.uid)}" title="${t.start ? `${t.start} ` : ''}${esc(t.title)}"><i class="dot"></i><span>${esc(t.title)}</span></div>`),
+    ];
+    const shown = lines.length > MONTH_CELL_LINES ? lines.slice(0, MONTH_CELL_LINES - 1) : lines;
+    const more = lines.length - shown.length;
+    return `
+      <div class="mo-cell${d.date.slice(0, 7) !== month ? ' out' : ''}${d.date === st.today ? ' today' : ''}">
+        <button class="mo-date" data-action="open-day" data-date="${d.date}" title="查看这一天">
+          <span class="d num">${parseDate(d.date).getDate()}</span>
+          ${d.holiday ? `<span class="mo-holiday">${esc(d.holiday)}</span>` : ''}
+          ${d.total ? `<span class="mo-count num${d.done === d.total ? ' all' : ''}">${d.done}/${d.total}</span>` : ''}
+        </button>
+        ${shown.join('')}
+        ${more ? `<button class="mo-more" data-action="open-day" data-date="${d.date}">还有 ${more} 项</button>` : ''}
+      </div>`;
+  }).join('');
+  return `${head}${rangeSummary(days.filter((d) => d.date.slice(0, 7) === month))}
+    <div class="month">${WEEK_CN.map((w) => `<div class="mo-wd">${w}</div>`).join('')}${cells}</div>`;
+}
+
+function dayView() {
+  if (S.span !== 'day' && S.range) return S.span === 'week' ? weekView() : monthView();
+  const st = S.state;
+  const day = st.day;
+  const isToday = st.selected === st.today;
+  const head = scheduleHead(
+    `${relativeLabel(st.selected, st.today)} · ${day.weekday}${day.holiday ? ` · <span class="holiday-name">${esc(day.holiday)}</span>` : ''}`,
+    monthDay(st.selected));
 
   if (!st.plans.length && !day.total) {
     return head + `
@@ -253,6 +436,7 @@ function dayView() {
   const chips = [];
   if (day.holiday_windows) chips.push(`<span class="chip">${icon('flag', 'sm')}祝日 · 按祝日时间段</span>`);
   if (day.is_exception) chips.push(`<span class="chip">${icon('sun', 'sm')}例外日期${day.exception_note ? ` · ${esc(day.exception_note)}` : ''}</span>`);
+  if (day.manual_order) chips.push(`<button class="chip" data-action="reset-order" title="删除这一天的手动排序和重排时刻，回到自动排程。改期的任务不受影响">${icon('undo', 'sm')}${day.replan_at ? `已从 ${day.replan_at} 起重排` : '已手动调整'} · 恢复自动</button>`);
   if (day.focus_count) chips.push(`<span class="chip">${icon('timer', 'sm')}专注 ${day.focus_count} 次 · ${day.focus_minutes} 分钟</span>`);
   if (st.overdue_total) chips.push(`<button class="chip warn" data-action="${isToday ? 'scroll-overdue' : 'today'}">${icon('alert', 'sm')}逾期 ${st.overdue_total} 项</button>`);
   const summary = day.total ? `
@@ -266,7 +450,7 @@ function dayView() {
     </div>` : (chips.length ? `<div class="summary-chips" style="justify-content:flex-start;margin-bottom:18px">${chips.join('')}</div>` : '');
 
   const milestones = day.milestones.map((m) => `
-    <div class="milestone" style="--c:${esc(m.color)}">${icon('flag')}<div><strong>${esc(m.text)}</strong> <small>· ${esc(m.plan_name)}${m.note ? ` · ${esc(m.note)}` : ''}</small></div></div>`).join('');
+    <div class="milestone" style="--c:${esc(m.color)}">${icon('flag')}<div${milestoneTitle(m)}><strong>${esc(m.text)}</strong> <small>· ${esc(m.plan_name)}${m.note ? ` · ${esc(m.note)}` : ''}${m.done ? ' · 已达成' : ''}${m.moved_from ? ` · 原定 ${shortDate(m.moved_from)}` : ''}</small></div></div>`).join('');
 
   let body = '';
   if (!day.total && !day.groups.length) {
@@ -285,16 +469,17 @@ function dayView() {
       ...day.groups.map((g) => {
         const w = g.window;
         const items = [...g.tasks, ...(fixedIn.get(g) || [])].sort((a, b) => toMin(a.start) - toMin(b.start));
-        const tasks = items.map((t) => taskHtml(t, { fixedMark: true })).join('') || '<div class="slot-empty">没有安排任务</div>';
+        const tasks = items.map((t) => taskHtml(t, { fixedMark: true, drag: true })).join('')
+          || `<div class="slot-empty">${g.passed ? `已经过去，${esc(day.replan_at)} 起重排时没有放任务` : '没有安排任务'}</div>`;
         const lastEnd = Math.max(toMin(w.start), ...items.map((t) => Math.min(toMin(t.end), toMin(w.end))));
         const free = toMin(w.end) - lastEnd;
         return { start: w.start, html: `
-          <section class="slot" style="--tagc:${tagColor(w.tag)}">
+          <section class="slot${g.passed ? ' passed' : ''}" style="--tagc:${tagColor(w.tag)}">
             <div class="slot-rail"><div class="t">${w.start}</div><div class="t2">${w.end}</div></div>
             <div class="slot-main">
               <div class="slot-head"><span class="slot-name">${esc(w.label || tagName(w.tag))}</span><span class="tag">${esc(tagName(w.tag))}</span>
-                ${items.length ? `<span class="slot-free num">${free > 0 ? `空余 ${free} 分钟` : '已排满'}</span>` : ''}</div>
-              ${tasks}
+                ${g.passed ? '<span class="slot-free">已过去</span>' : (items.length ? `<span class="slot-free num">${free > 0 ? `空余 ${free} 分钟` : '已排满'}</span>` : '')}</div>
+              <div class="drop-zone" data-window="${w.start}">${tasks}</div>
             </div>
           </section>` };
       }),
@@ -315,11 +500,18 @@ function dayView() {
     overflow = `
       <div class="section">
         <div class="alert warn">${icon('alert')}<div><strong>${day.overflow.length} 项任务没排进空闲时间</strong><br>
-          <span class="muted">空闲时间不够，或没有类型匹配的时间段。可以在“空闲时间”页加时间，或让 skill 调整计划。</span></div>
+          <span class="muted">空闲时间不够，或没有类型匹配的时间段。可以拖到有空余的时间段，在“空闲时间”页加时间，或让 skill 调整计划。</span></div>
           <button class="link" data-action="view" data-view="profile">调整空闲时间</button></div>
-        <div style="margin-top:10px">${day.overflow.map((t) => taskHtml(t)).join('')}</div>
+        <div style="margin-top:10px">${day.overflow.map((t) => taskHtml(t, { drag: day.groups.length > 0 })).join('')}</div>
       </div>`;
   }
+
+  const early = day.early.length ? `
+    <div class="section">
+      <div class="section-head"><h3>已提前完成</h3><span class="chip num">${day.early.length} 项 · ${day.early.reduce((n, t) => n + t.minutes, 0)} 分钟</span></div>
+      <div class="section-hint">在这一天之前完成的任务不占当天的时间，其余任务按空出的时间排。</div>
+      ${day.early.map((t) => taskHtml(t)).join('')}
+    </div>` : '';
 
   const history = day.history.length ? `
     <div class="section"><div class="section-head"><h3>计划调整前的完成记录</h3></div>
@@ -341,7 +533,7 @@ function dayView() {
         ${st.overdue_total > st.overdue.length ? `<div class="muted">其余 ${st.overdue_total - st.overdue.length} 项未显示</div>` : ''}
       </details>`;
   }
-  return head + summary + milestones + body + overflow + history + overdue;
+  return head + summary + milestones + body + overflow + early + history + overdue;
 }
 
 /* ---------- 计划 ---------- */
@@ -360,6 +552,15 @@ function phasesHtml(p, today) {
   const bar = p.phases.map((ph) => `<span class="${ph.current ? 'current' : (ph.past ? 'past' : '')}" style="flex:${ph.days}" title="${esc(ph.name)}">${nowMark(ph)}</span>`).join('');
   const labels = p.phases.map((ph) => `<div class="${ph.current ? 'current' : ''}" style="flex:${ph.days}" title="${esc(ph.name)}${ph.goal ? `：${esc(ph.goal)}` : ''}"><b>${esc(ph.name)}</b><span>${shortDate(ph.task_start)}–${shortDate(ph.task_end)}</span></div>`).join('');
   return `<div class="phases"><div class="phase-track"><div class="phase-bar">${bar}</div><div class="phase-labels">${labels}</div></div></div>`;
+}
+
+/* 里程碑的状态和推算依据 */
+function milestoneState(m) {
+  const parts = [m.done ? '已达成' : '', m.moved_from ? `原定 ${shortDate(m.moved_from)}` : ''].filter(Boolean);
+  return parts.length ? ` <span class="muted">· ${parts.join(' · ')}</span>` : '';
+}
+function milestoneTitle(m) {
+  return m.follows && m.follows.length ? ` title="按“${esc(m.follows.join('”“'))}”任务的进度推算"` : '';
 }
 
 function planBrief(p, today) {
@@ -400,7 +601,7 @@ function planCard(p, today) {
     </div>`;
   const overdue = p.overdue_count ? `<div class="alert warn" style="margin-top:16px">${icon('alert')}<span>逾期 ${p.overdue_count} 项，共 ${p.overdue_minutes} 分钟。不重排的话，补完约需多 ${p.extra_days} 天。</span></div>` : '';
   const milestones = p.milestones.length
-    ? p.milestones.map((m) => `<div class="ms${m.past ? ' past' : ''}"><span class="d">${shortDate(m.date)}</span><span class="t">${esc(m.text)}</span></div>`).join('')
+    ? p.milestones.map((m) => `<div class="ms${m.past ? ' past' : ''}"${milestoneTitle(m)}><span class="d">${shortDate(m.date)}</span><span class="t">${esc(m.text)}${milestoneState(m)}</span></div>`).join('')
     : '<div class="muted">无</div>';
   const sequences = p.sequences.length
     ? p.sequences.map((s) => `
@@ -415,6 +616,7 @@ function planCard(p, today) {
   const foot = [
     `${p.start} – ${p.end}`,
     p.deadline ? `截止 ${p.deadline}` : '',
+    p.moved_count ? `改期 ${p.moved_count} 项${p.last_task ? `，最后一项没做的任务在 ${p.last_task}` : ''}` : '',
     `优先级 ${p.priority}`,
     p.history_records ? `计划调整前的完成记录 ${p.history_records} 条` : '',
   ].filter(Boolean).map((x) => `<span>${esc(x)}</span>`).join('');
@@ -433,7 +635,7 @@ function planCard(p, today) {
       ${p.phases.length
         ? `<div class="plan-cols"><div><h4>里程碑</h4>${milestones}</div><div><h4>内容进度</h4>${sequences}</div></div>`
         : `<div class="plan-block"><h4>安排</h4>${p.events.map((e) => `
-            <div class="ms${e.done ? ' past' : ''}"><span class="d num" style="width:92px">${shortDate(e.date)} ${e.time || ''}</span><span class="t">${esc(e.title)}${e.location ? ` <span class="muted">· ${esc(e.location)}</span>` : ''}</span></div>`).join('')}</div>`}
+            <div class="ms${e.done ? ' past' : ''}"><span class="d num" style="width:92px">${shortDate(e.date)} ${e.time || ''}</span><span class="t">${esc(e.title)}${e.location ? ` <span class="muted">· ${esc(e.location)}</span>` : ''}${e.moved_from ? ` <span class="muted">· 原定 ${shortDate(e.moved_from)}</span>` : ''}</span></div>`).join('')}</div>`}
       ${resources}
       ${notes}
       <div class="plan-foot">${foot}</div>
@@ -466,7 +668,7 @@ function plansView() {
   return `
     <div class="page-head">
       <div><h1 class="page-title">计划</h1><div class="page-sub">${st.plans.length} 个计划，按优先级排列。计划文件由 skill 写入，手动修改后会自动重新加载。</div></div>
-      <div class="head-actions">${st.plans.length ? `<button class="btn" id="collapse-all" data-action="collapse-all">${collapseAllLabel()}</button>` : ''}<button class="btn" data-action="open-dir" title="${esc(st.plans_dir)}">${icon('folder', 'sm')}打开文件夹</button><button class="btn" data-action="reload">${icon('refresh', 'sm')}重新加载</button></div>
+      <div class="head-actions"><button class="btn" data-action="goto-today" title="回到今天的日程">${icon('calendar', 'sm')}今天的日程</button>${st.plans.length ? `<button class="btn" id="collapse-all" data-action="collapse-all">${collapseAllLabel()}</button>` : ''}<button class="btn" data-action="open-dir" title="${esc(st.plans_dir)}">${icon('folder', 'sm')}打开文件夹</button><button class="btn" data-action="reload">${icon('refresh', 'sm')}重新加载</button></div>
     </div>
     ${errors}${cards}${empty}${archived}`;
 }
@@ -775,13 +977,29 @@ function exceptionDialog(index) {
 /* ---------- 事件 ---------- */
 document.addEventListener('click', async (event) => {
   const el = event.target.closest('[data-action]');
-  if (!el || !S.state) return;
+  if (!S.state) return;
+  if (!el) {
+    // 点任务卡片上按钮以外的地方打开详情。正在选中文字时不打开
+    const card = event.target.closest('.task[data-uid], .task-mini[data-uid], .mo-task[data-uid]');
+    if (!card || event.target.closest('button, a, .grip') || String(getSelection()).trim()) return;
+    const task = findByUid(card.dataset.uid);
+    if (task) taskDetailDialog(task);
+    return;
+  }
   const action = el.dataset.action;
   const st = S.state;
   if (action === 'view') setView(el.dataset.view);
   else if (action === 'pick') { S.view = 'day'; await refresh(el.dataset.date); }
-  else if (action === 'shift') await refresh(addDays(st.selected, Number(el.dataset.n)));
+  else if (action === 'shift') await refresh(shiftSelected(Number(el.dataset.n)));
   else if (action === 'today') { S.view = 'day'; await refresh(st.today); }
+  else if (action === 'span') { setSpan(el.dataset.span); await refresh(); }
+  else if (action === 'open-day' || action === 'goto-today') {
+    // 从周视图、月视图点某一天，或从别的页面回到今天：切到单日视图
+    setSpan('day');
+    S.view = 'day';
+    await refresh(action === 'goto-today' ? st.today : el.dataset.date);
+    $('#main').scrollTop = 0;
+  }
   else if (action === 'cal-shift') {
     const [y, m] = S.calMonth.split('-').map(Number);
     const d = new Date(y, m - 1 + Number(el.dataset.n), 1);
@@ -790,9 +1008,15 @@ document.addEventListener('click', async (event) => {
   } else if (action === 'toggle') {
     if (S.busy) return;
     S.busy = true;
+    const task = findByUid(el.dataset.uid);
     const res = await call('set_done', el.dataset.uid, el.dataset.done !== '1');
     S.busy = false;
-    if (!res.ok) toast(res.error, true);
+    await refresh();
+    doneToast(task, res);
+  } else if (action === 'replan-all') {
+    replanAllDialog();
+  } else if (action === 'reset-order') {
+    report(await call('reset_day_order', st.selected));
     await refresh();
   } else if (action === 'scroll-overdue') {
     const target = $('#overdue');
@@ -893,6 +1117,20 @@ document.addEventListener('click', async (event) => {
     await refresh();
   }
   else if (action === 'open-data-dir') report(await call('open_data_dir'));
+  else if (action === 'check-update') checkUpdate();
+  else if (action === 'start-update') {
+    const res = await call('start_update');
+    if (!res.ok) { toast(res.error, true); return; }
+    S.updateJob = res;
+    render();
+    pollUpdate();
+  }
+  else if (action === 'install-update') {
+    if (!await confirmDialog('重启并更新', '计划本会关闭并启动新版本，正在进行的番茄钟会中断。')) return;
+    const res = await call('install_update');
+    if (!res.ok) toast(res.error, true);
+    else toast('正在重启');
+  }
 });
 
 document.addEventListener('change', async (event) => {
@@ -923,20 +1161,130 @@ document.addEventListener('change', async (event) => {
 });
 
 document.addEventListener('keydown', async (event) => {
+  if (drag) {
+    if (event.key === 'Escape') endDrag();
+    return;
+  }
   if (!S.state || $('#modal').open || $('#confirm').open || ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
   if (pomoFull()) {
     if (event.key === 'Escape') { S.pomoLayout = 'mini'; renderPomodoro(); }
     return;
   }
-  if (event.key === 'ArrowLeft') await refresh(addDays(S.state.selected, -1));
-  else if (event.key === 'ArrowRight') await refresh(addDays(S.state.selected, 1));
+  if (event.key === 'ArrowLeft') await refresh(shiftSelected(-1));
+  else if (event.key === 'ArrowRight') await refresh(shiftSelected(1));
   else if (event.key.toLowerCase() === 't') { S.view = 'day'; await refresh(S.state.today); }
 });
+
+/* ---------- 拖动排序 ----------
+   按住任务左侧的手柄拖动，松开时把目标时间段和位置交给后端重排。定时任务没有手柄。 */
+let drag = null;
+const DRAG_THRESHOLD = 4;
+const DROP_REACH = 48;   // 指针离时间段多远以内算作拖进这个时间段
+const SCROLL_EDGE = 56;  // 指针靠近 #main 上下边缘多远以内时自动滚动
+
+document.addEventListener('pointerdown', (event) => {
+  const grip = event.target.closest('.grip');
+  if (!grip || event.button !== 0 || S.busy || drag) return;
+  const card = grip.closest('.task');
+  event.preventDefault();
+  try { grip.setPointerCapture(event.pointerId); } catch { /* 捕获失败时事件仍会冒泡到 document */ }
+  drag = { card, uid: card.dataset.uid, pointerId: event.pointerId, x: event.clientX, y: event.clientY, px: event.clientX, py: event.clientY, active: false };
+});
+
+document.addEventListener('pointermove', (event) => {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  drag.px = event.clientX;
+  drag.py = event.clientY;
+  if (!drag.active) {
+    if (Math.hypot(drag.px - drag.x, drag.py - drag.y) < DRAG_THRESHOLD) return;
+    startDrag();
+  }
+  updateDrag();
+});
+
+function startDrag() {
+  const rect = drag.card.getBoundingClientRect();
+  const ghost = drag.card.cloneNode(true);
+  ghost.classList.add('drag-ghost');
+  ghost.style.left = `${rect.left}px`;
+  ghost.style.top = `${rect.top}px`;
+  ghost.style.width = `${rect.width}px`;
+  document.body.appendChild(ghost);
+  drag.ghost = ghost;
+  drag.line = document.createElement('div');
+  drag.line.className = 'drop-line';
+  drag.card.classList.add('drag-src');
+  document.body.classList.add('dragging');
+  drag.active = true;
+  drag.timer = setInterval(autoScroll, 16);
+}
+
+function updateDrag() {
+  drag.ghost.style.transform = `translate(${drag.px - drag.x}px, ${drag.py - drag.y}px)`;
+  let zone = null;
+  let best = DROP_REACH;
+  document.querySelectorAll('.drop-zone').forEach((z) => {
+    const r = z.closest('.slot').getBoundingClientRect();
+    const distance = drag.py < r.top ? r.top - drag.py : Math.max(0, drag.py - r.bottom);
+    if (distance < best) { best = distance; zone = z; }
+  });
+  if (!zone) { drag.line.remove(); return; }
+  const before = [...zone.querySelectorAll('.task')].find((el) => {
+    const r = el.getBoundingClientRect();
+    return drag.py < r.top + r.height / 2;
+  }) || null;
+  if (drag.line.parentNode !== zone || drag.line.nextElementSibling !== before) zone.insertBefore(drag.line, before);
+}
+
+function autoScroll() {
+  const main = $('#main');
+  const r = main.getBoundingClientRect();
+  const speed = drag.py < r.top + SCROLL_EDGE ? -1 : (drag.py > r.bottom - SCROLL_EDGE ? 1 : 0);
+  if (!speed) return;
+  const top = main.scrollTop;
+  main.scrollTop += speed * 10;
+  if (main.scrollTop !== top) updateDrag();
+}
+
+/* 结束拖动并清理。返回松开位置对应的目标，没有拖到时间段上或位置没变时返回 null */
+function endDrag() {
+  if (!drag) return null;
+  const d = drag;
+  drag = null;
+  if (!d.active) return null;
+  clearInterval(d.timer);
+  const zone = d.line.parentNode;
+  let target = null;
+  if (zone && d.line.previousElementSibling !== d.card && d.line.nextElementSibling !== d.card) {
+    let index = 0;
+    for (let el = zone.firstElementChild; el !== d.line; el = el.nextElementSibling) if (el.dataset.drag && el !== d.card) index += 1;
+    target = { uid: d.uid, window: zone.dataset.window, index, hasFixed: Boolean(zone.querySelector('.task:not([data-drag])')) };
+  }
+  d.ghost.remove();
+  d.line.remove();
+  d.card.classList.remove('drag-src');
+  document.body.classList.remove('dragging');
+  return target;
+}
+
+document.addEventListener('pointerup', async (event) => {
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  const target = endDrag();
+  if (!target) return;
+  S.busy = true;
+  const res = await call('move_session', target.uid, target.window, target.index);
+  S.busy = false;
+  if (!res.ok) toast(res.error, true);
+  else if (!res.changed && target.hasFixed) toast('时间没有变化，定时任务的位置是固定的');
+  await refresh();
+});
+document.addEventListener('pointercancel', (event) => { if (drag && event.pointerId === drag.pointerId) endDrag(); });
 
 function report(res) { if (res && res.ok === false) toast(res.error, true); }
 
 async function poll() {
   try {
+    if (drag) return;
     const res = await call('poll');
     const modeChanged = !S.pomo || res.pomodoro.mode !== S.pomo.mode;
     if (res.changed) { await refresh(); toast('计划已更新'); }
@@ -945,12 +1293,173 @@ async function poll() {
   } catch (error) { /* 忽略一次失败，下次再试 */ }
 }
 
-/* ---------- 临时任务 ---------- */
-function findTask(taskId) {
+/* ---------- 任务详情 ---------- */
+function shownTasks() {
   const day = S.state.day;
-  const pools = [...day.groups.flatMap((g) => g.tasks), ...day.fixed, ...day.overflow, ...S.state.overdue];
-  return pools.find((t) => t.task_id === taskId);
+  const ranged = S.range ? S.range.days.flatMap((d) => d.tasks) : [];
+  return [...day.groups.flatMap((g) => g.tasks), ...day.fixed, ...day.overflow, ...day.early, ...ranged, ...S.state.overdue];
 }
+function findByUid(uid) { return shownTasks().find((t) => t.uid === uid); }
+/* 勾选或取消完成后的提示。提前完成按周重复的任务时，同一项重复任务后面的各项依次前移 */
+function doneToast(t, res) {
+  if (!res.ok) toast(res.error, true);
+  else if (t && !t.done && res.shifted) toast(`已提前完成，后面 ${res.shifted} 项同一任务依次提前`);
+  else if (t && !t.done && t.date > S.state.today) toast(`已提前完成，${monthDay(t.date)}空出 ${t.minutes} 分钟`);
+  else if (t && t.done && res.shifted) toast(`已取消完成，${res.shifted} 项任务移回原来的日期`);
+}
+
+/* ---------- 全部重排 ---------- */
+function replanAllDialog() {
+  const moved = S.state.moved_total;
+  openModal(`
+    <h3>全部重排</h3>
+    <div class="desc">从现在起按排程规则重新安排所有没做的任务，不经过 skill，计划文件不变。</div>
+    <ul class="replan-rules">
+      <li>逾期的任务和当天放不下的任务，按原定的先后顺序排进之后的空余时间。</li>
+      <li>定时任务、单次任务和临时任务留在原来的日期。</li>
+      <li>今天从现在的时间起排。</li>
+    </ul>
+    <label class="switch"><input type="checkbox" name="pull" checked><span>把之后的任务提前，填进前面的空余时间<br><span class="muted" style="font-size:12.5px">最早到今天，且不早于所在阶段的开始日期</span></span></label>
+    <div class="modal-actions">
+      ${moved ? `<button class="btn ghost" value="restore-all" title="取消所有改期">${icon('undo', 'sm')}全部移回原定日期（${moved} 项）</button>` : ''}
+      <span class="spacer"></span>
+      <button class="btn" value="cancel">取消</button>
+      <button class="btn primary" value="replan">${icon('refresh', 'sm')}重排</button>
+    </div>`, async (f, action) => {
+    if (action === 'restore-all') {
+      const res = await call('restore_all_days');
+      await refresh();
+      if (!res.ok) toast(res.error, true);
+      else toast(`已把 ${res.restored} 项任务移回原定日期`);
+      return true;
+    }
+    const res = await call('replan_all', f.pull.checked);
+    await refresh();
+    if (!res.ok) { toast(res.error, true); return true; }
+    const parts = [res.moved ? `已从 ${res.time} 起重排，${res.moved} 项任务改了日期` : `已从 ${res.time} 起重排，没有任务需要改日期`];
+    if (res.beyond) parts.push(`${res.beyond} 项排到了计划结束日期之后`);
+    if (res.unplaced) parts.push(`${res.unplaced} 项找不到放得下的日期`);
+    toast(parts.join('，'));
+    return true;
+  });
+}
+
+/* 和 reminders.py 的规则一致：定时任务按提前量提醒，其余任务在开始时提醒 */
+function remindText(t) {
+  const cfg = S.state.settings.reminders;
+  if (t.remind === false) return '不提醒';
+  if (t.fixed && cfg.timed) {
+    const lead = typeof t.remind === 'number' ? t.remind : cfg.timed_lead;
+    return lead ? `提前 ${lead} 分钟` : '开始时';
+  }
+  return cfg.task_start ? '开始时' : '不提醒';
+}
+
+function taskDetailDialog(t) {
+  const st = S.state;
+  const plan = st.plans.find((p) => p.id === t.plan_id);
+  const phase = plan && plan.phases.find((p) => p.name === t.phase && p.start <= t.date && t.date <= p.end);
+  const seq = t.uses && plan ? plan.sequences.find((x) => x.name === t.uses.seq) : null;
+  const lateDays = t.done ? 0 : diffDays(st.today, t.date);
+  const rows = [];
+  const row = (label, html) => rows.push(`<dt>${label}</dt><dd>${html}</dd>`);
+
+  row('时间', [
+    `${monthDay(t.date)} ${esc(t.weekday)}`,
+    t.start ? `<span class="num">${t.start}–${t.end}</span>` : '',
+    `${t.minutes} 分钟`,
+    t.fixed ? '定时' : '',
+  ].filter(Boolean).join(' · ') + (t.unplaced ? `<div class="sub">没排进空闲时间${t.reason ? `：${esc(t.reason)}` : ''}</div>` : '')
+    + (t.early ? '<div class="sub">已提前完成，不占当天的时间</div>' : ''));
+  if (t.moved_from) row('原定日期', `${monthDay(t.moved_from)} ${esc(t.moved_from_weekday)}`);
+  if (t.window) {
+    const w = t.window;
+    row('时间段', `${esc(w.label ? `${w.label} · ${tagName(w.tag)}` : tagName(w.tag))} <span class="sub num">${w.start}–${w.end}</span>`);
+  }
+  if (t.done) row('状态', `<span class="ok">已完成</span>${t.done_at ? ` <span class="sub num">${shortDate(t.done_at.slice(0, 10))} ${t.done_at.slice(11, 16)}</span>` : ''}`);
+  else row('状态', lateDays > 0 ? `<span class="late">逾期 ${lateDays} 天</span>` : '未完成');
+  if (plan && plan.goal) row('计划目标', esc(plan.goal));
+  if (t.phase) {
+    row('阶段', `${esc(t.phase)}${phase ? ` <span class="sub num">${shortDate(phase.start)}–${shortDate(phase.end)}</span>` : ''}`
+      + (phase && phase.goal ? `<div class="sub">${esc(phase.goal)}</div>` : '')
+      + (phase && phase.focus ? `<div class="sub">重点：${esc(phase.focus)}</div>` : ''));
+  }
+  if (t.uses) {
+    row('内容', `${esc(seq ? seq.title : t.uses.seq)}：${esc(t.uses.item)}`
+      + (seq ? `<div class="sub num">这个序列已完成 ${seq.done} / ${seq.total} 项</div>` : ''));
+  }
+  if (t.detail) row('说明', `<div class="pre">${esc(t.detail)}</div>`);
+  if (t.location) row('地点', `<div class="chips">${locationChip(t.location)}</div>`);
+  if (t.links && t.links.length) row('链接', `<div class="chips">${t.links.map(linkChip).join('')}</div>`);
+  if (t.start && !t.done) row('提醒', remindText(t));
+  if (t.focus_count) row('专注', `<span class="num">${t.focus_count} 次 · ${t.focus_minutes} 分钟</span>`);
+  const isToday = t.date === st.today;
+  const adjust = [
+    !t.done && isToday ? `<button class="btn sm" value="finish-replan" title="记下现在的时间，今天还没做的任务从现在起重排">${icon('check', 'sm')}完成并重排</button>` : '',
+    !t.done ? `<button class="btn sm" value="postpone" title="${isToday ? '今天还没做的任务从现在起重排' : '改到另一天，计划文件不变'}">${icon('skip', 'sm')}${t.date < st.today ? '排到今天' : (isToday ? '排到明天' : '排到后一天')}</button>` : '',
+    t.moved_from ? `<button class="btn sm" value="restore">${icon('undo', 'sm')}移回 ${shortDate(t.moved_from)}</button>` : '',
+  ].filter(Boolean);
+  if (adjust.length) row('调整', `<div class="chips">${adjust.join('')}</div>`);
+
+  const modal = $('#modal');
+  modal.classList.add('wide');
+  modal.addEventListener('close', () => modal.classList.remove('wide'), { once: true });
+  const form = openModal(`
+    <div class="detail-head" style="--c:${esc(t.color)}">
+      <div class="detail-plan"><i class="dot"></i>${esc(t.plan_name)}${plan && plan.category ? ` · ${esc(plan.category)}` : ''}</div>
+      <button class="icon-btn sm" value="cancel" title="关闭（Esc）">${icon('close', 'sm')}</button>
+    </div>
+    <h3 class="detail-title">${esc(t.title)}</h3>
+    <dl class="detail-list">${rows.join('')}</dl>
+    <div class="modal-actions">
+      ${plan ? `<button class="btn ghost" value="plan">${icon('layers', 'sm')}查看计划</button>` : ''}
+      ${t.is_task ? `<button class="btn ghost" value="edit">${icon('edit', 'sm')}编辑</button>` : ''}
+      <span class="spacer"></span>
+      ${t.done ? '' : `<button class="btn" value="focus">${icon('timer', 'sm')}开始专注</button>`}
+      <button class="btn${t.done ? '' : ' primary'}" value="toggle">${icon('check', 'sm')}${t.done ? '取消完成' : '标记完成'}</button>
+    </div>`, async (f, action) => {
+    if (action === 'toggle') {
+      const res = await call('set_done', t.uid, !t.done);
+      await refresh();
+      doneToast(t, res);
+    } else if (action === 'finish-replan') {
+      const res = await call('finish_and_replan', t.uid);
+      await refresh();
+      if (!res.ok) toast(res.error, true);
+      else toast(res.replanned ? `已完成，今天还没做的任务从 ${res.time} 起重排` : '已完成');
+    } else if (action === 'postpone' || action === 'restore') {
+      const res = await call(action === 'postpone' ? 'postpone_session' : 'restore_session_day', t.uid);
+      await refresh();
+      if (!res.ok) toast(res.error, true);
+      else {
+        const where = `${monthDay(res.date)} ${res.weekday}`;
+        toast(res.start ? `已排到 ${where} ${res.start}–${res.end}` : `已排到 ${where}，放不下，显示在未排入`);
+      }
+    } else if (action === 'focus') {
+      S.pomoLayout = null;
+      setPomo(await call('pomodoro_start', t.uid));
+      render();
+    } else if (action === 'plan') {
+      S.view = 'plans';
+      if (S.collapsed.delete(t.plan_id)) saveCollapsed();
+      render();
+      const card = document.getElementById(`plan-${t.plan_id}`);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else if (action === 'edit') {
+      // 编辑框和详情用同一个弹窗，等详情关闭后再打开
+      setTimeout(() => taskDialog(findTask(t.task_id)), 0);
+    }
+    return true;
+  });
+  // 焦点放在内容区：不在关闭按钮上显示焦点框，方向键可以滚动长内容
+  const list = $('.detail-list', form);
+  list.tabIndex = -1;
+  list.focus();
+  return form;
+}
+
+/* ---------- 临时任务 ---------- */
+function findTask(taskId) { return shownTasks().find((t) => t.task_id === taskId); }
 
 const REMIND_OPTIONS = [['', '默认'], ['off', '不提醒'], ['0', '开始时'], ['5', '提前 5 分钟'], ['10', '提前 10 分钟'], ['15', '提前 15 分钟'], ['30', '提前 30 分钟'], ['60', '提前 1 小时']];
 
@@ -1149,15 +1658,83 @@ function settingsView() {
     </div>
     <div class="card panel">
       <div class="panel-head"><h3>后台运行</h3></div>
-      ${row('关闭窗口时缩到托盘', '缩到右下角托盘后提醒照常发送。关闭这个选项后，关闭窗口即退出，不再提醒。', toggle('app.close_to_tray'))}
+      ${row('点关闭按钮时', '最小化到托盘后提醒和番茄钟照常运行，退出后不再提醒。选“每次询问”时，下次点关闭按钮会再问一次。',
+        `<select class="input" data-setting="app.close_action">${CLOSE_ACTIONS.map(([v, l]) => `<option value="${v}" ${get('app.close_action') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`)}
       ${row('开机自动启动', autostartDesc, toggle('app.autostart', !app.autostart_supported))}
     </div>
     ${skillPanel(app)}
     <div class="card panel">
       <div class="panel-head"><h3>数据</h3><button class="btn sm" data-action="open-data-dir">${icon('folder', 'sm')}打开数据目录</button></div>
       <div class="set-desc num">${esc(S.state.home)}</div>
-      <div class="set-desc" style="margin-top:6px">计划本 ${esc(app.version || '')}</div>
+    </div>
+    ${aboutPanel(app, row, toggle)}`;
+}
+
+/* ---------- 版本和更新 ---------- */
+function mb(bytes) { return (bytes / 1048576).toFixed(1); }
+
+function aboutPanel(app, row, toggle) {
+  const info = S.update || app.update;
+  const job = S.updateJob || { stage: 'idle' };
+  let body = '';
+  if (S.updateChecking) {
+    body = '<div class="set-desc">正在检查更新</div>';
+  } else if (S.updateError) {
+    body = `<div class="alert error">${icon('alert')}<span>${esc(S.updateError)}</span></div>`;
+  } else if (info && !info.newer) {
+    body = `<div class="set-desc">已是最新版本${info.checked ? `（${esc(info.checked)} 检查）` : ''}。</div>`;
+  } else if (info && info.newer) {
+    let action = '';
+    if (!app.can_update) {
+      action = `<div class="set-desc">当前不是打包后的 exe，不能自动更新。可以在 GitHub 下载新版本。</div>`;
+    } else if (!info.has_asset) {
+      action = '<div class="set-desc">这个版本没有提供安装包，请在 GitHub 下载。</div>';
+    } else if (job.stage === 'downloading') {
+      const pct = job.total ? Math.min(100, Math.round((job.received / job.total) * 100)) : 0;
+      action = `<div class="update-progress"><div class="bar"><span style="width:${pct}%"></span></div>
+        <div class="set-desc num">正在下载 ${mb(job.received || 0)} / ${mb(job.total || 0)} MB</div></div>`;
+    } else if (job.stage === 'ready') {
+      action = `<div class="update-actions"><span class="set-desc">下载完成，重启后使用新版本。</span>
+        <button class="btn primary sm" data-action="install-update">${icon('refresh', 'sm')}重启并更新</button></div>`;
+    } else {
+      action = `${job.stage === 'error' ? `<div class="alert error">${icon('alert')}<span>${esc(job.error)}</span></div>` : ''}
+        <div class="update-actions"><button class="btn primary sm" data-action="start-update">${icon('download', 'sm')}${job.stage === 'error' ? '重新下载' : '下载更新'}</button></div>`;
+    }
+    body = `
+      <div class="update-box">
+        <div class="update-title">新版本 ${esc(info.latest)}${info.published ? ` <span class="muted num">· ${esc(info.published)} 发布</span>` : ''}</div>
+        ${info.notes ? `<details class="update-notes"><summary>更新内容</summary><div class="md">${markdown(info.notes)}</div></details>` : ''}
+        ${action}
+        <button class="link" data-action="open-url" data-url="${esc(info.url)}">在 GitHub 查看</button>
+      </div>`;
+  }
+  return `
+    <div class="card panel">
+      <div class="panel-head"><h3>关于</h3><button class="btn sm" data-action="check-update" ${S.updateChecking || job.stage === 'downloading' ? 'disabled' : ''}>${icon('refresh', 'sm')}检查更新</button></div>
+      ${row('版本', '', `<span class="num">${esc(app.version || '')}</span>`)}
+      ${row('自动检查更新', '启动后检查一次 GitHub 上的最新版本，有新版本时“设置”旁显示圆点。只在打包后的 exe 中生效。', toggle('app.check_updates'))}
+      ${body}
     </div>`;
+}
+
+async function checkUpdate() {
+  S.updateChecking = true;
+  S.updateError = '';
+  render();
+  const res = await call('check_update');
+  S.updateChecking = false;
+  if (res.ok) S.update = res;
+  else S.updateError = res.error;
+  await refresh();
+  if (res.ok) toast(res.newer ? `发现新版本 ${res.latest}` : '已是最新版本');
+}
+
+async function pollUpdate() {
+  const res = await call('update_status');
+  S.updateJob = res;
+  if (S.view === 'settings') render();
+  if (res.stage === 'downloading') setTimeout(pollUpdate, 500);
+  else if (res.stage === 'ready') toast('新版本下载完成');
 }
 
 function skillPanel(app) {

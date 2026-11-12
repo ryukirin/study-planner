@@ -143,6 +143,16 @@ class SettingsTest(unittest.TestCase):
         merged = validate_settings({"pomodoro": {"focus": 50}})
         self.assertEqual((merged["pomodoro"]["focus"], merged["pomodoro"]["short_break"]), (50, 5))
 
+    def test_close_action_and_old_close_to_tray(self):
+        self.assertEqual(validate_settings({})["app"]["close_action"], "ask")
+        self.assertEqual(validate_settings({"app": {"close_action": "quit"}})["app"]["close_action"], "quit")
+        # 旧版本的 close_to_tray：关掉时等同于退出，开着时先询问
+        self.assertEqual(validate_settings({"app": {"close_to_tray": False}})["app"]["close_action"], "quit")
+        self.assertEqual(validate_settings({"app": {"close_to_tray": True}})["app"]["close_action"], "ask")
+        self.assertNotIn("close_to_tray", validate_settings({"app": {"close_to_tray": True}})["app"])
+        with self.assertRaises(SettingsError):
+            validate_settings({"app": {"close_action": "minimize"}})
+
     def test_full_page_flag(self):
         self.assertTrue(validate_settings({})["pomodoro"]["full_page"])
         self.assertFalse(validate_settings({"pomodoro": {"full_page": False}})["pomodoro"]["full_page"])

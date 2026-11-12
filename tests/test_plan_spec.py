@@ -166,6 +166,13 @@ class ExpansionTest(unittest.TestCase):
         self.assertEqual(saturday[1].kind, "event")
         self.assertEqual(expansion.milestones[date(2026, 11, 22)][0].text, "完成")
 
+    def test_milestone_tasks_field(self):
+        plan = parse_plan(config(milestones=[{"date": "2026-11-22", "text": "完成", "tasks": ["学习", "ch"]}]))
+        self.assertEqual(plan.milestones[0].tasks, ["学习", "ch"])
+        self.assertEqual(parse_plan(config(milestones=[{"date": "2026-11-22", "text": "完成"}])).milestones[0].tasks, [])
+        errors = errors_of(config(milestones=[{"date": "2026-11-22", "text": "完成", "tasks": "学习"}]))
+        self.assertTrue(any("milestones[0].tasks" in error for error in errors))
+
     def test_uid_independent_of_text(self):
         first = config()
         second = config()

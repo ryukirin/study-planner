@@ -25,7 +25,7 @@ PHASE_KEYS = {"name", "goal", "focus", "weeks", "week"}
 TASK_COMMON_KEYS = {"title", "minutes", "slot", "detail", "time", "location", "links", "remind"}
 TASK_KEYS = TASK_COMMON_KEYS | {"uses"}
 EVENT_KEYS = TASK_COMMON_KEYS | {"date", "offset_days"}
-MILESTONE_KEYS = {"text", "note", "date", "offset_days"}
+MILESTONE_KEYS = {"text", "note", "date", "offset_days", "tasks"}
 SEQUENCE_KEYS = {"items", "range", "label", "on_exhausted", "title"}
 RANGE_KEYS = {"from", "to", "step"}
 
@@ -84,6 +84,10 @@ class Milestone:
     day: date
     text: str
     note: str = ""
+    tasks: list[str] = field(default_factory=list)  # 里程碑跟随的任务：标题里的词或序列名，空时按 text 推断
+    moved_from: date | None = None  # 跟着任务移动过的里程碑原定的日期，day 是移动后的日期
+    done: bool = False  # 跟随的任务全部完成，day 是完成的日期
+    follows: list[str] = field(default_factory=list)  # 实际跟随的任务关键词，空时表示没有对应的任务
 
 
 @dataclass
@@ -136,6 +140,7 @@ class Session:
     location: str = ""
     links: list[dict[str, str]] = field(default_factory=list)
     remind: int | bool | None = None
+    moved_from: date | None = None  # 改期的任务原定的日期，day 是改期后的日期
 
     @property
     def date_str(self) -> str:
@@ -621,9 +626,13 @@ def parse_plan(config: Any, notes: str = "", source_path: str = "") -> Plan:
         _unknown_keys(raw, MILESTONE_KEYS, path, errors)
         text = _str_field(raw, "text", path, errors, required=True)
         note = _str_field(raw, "note", path, errors)
+        tasks = raw.get("tasks", [])
+        if not isinstance(tasks, list) or not all(isinstance(word, str) and word.strip() for word in tasks):
+            errors.append(f"{path}.tasks：必须是非空字符串的数组")
+            tasks = []
         day = _resolve_day(raw, path, errors, start, end)
         if day and text:
-            milestones.append(Milestone(day=day, text=text, note=note))
+            milestones.append(Milestone(day=day, text=text, note=note, tasks=[word.strip() for word in tasks]))
 
     if errors or start is None or end is None:
         raise PlanError(errors or ["计划范围无法计算"])

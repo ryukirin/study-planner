@@ -20,6 +20,7 @@ description: 为计划本 App 生成和调整个人计划，并写入 App 自动
   - `plans\<id>.md`：计划文件，一个计划一个文件，App 每 5 秒检查一次并自动加载
   - `tasks.json`：一次性临时任务，用 `planner_cli add-task` 写入，不要手动编辑
   - `progress.json`：完成记录和番茄钟记录，由 App 写入，skill 只读
+  - `day_order.json`：用户在日程页做的手动调整（拖动后的当天顺序、重排的时刻、“排到明天”“全部重排”和提前完成时改期的任务），由 App 写入，skill 不读不改。`check` 的时间表预览已经按排序和改期排。重排计划后任务 id 变了的条目自动失效
 
 参考文件：
 

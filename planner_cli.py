@@ -71,17 +71,19 @@ def print_plans(ws: Workspace) -> None:
         print(f"  [{plan.id}] {plan.name}  {format_date(plan.start)} ~ {format_date(plan.end)}{deadline}  优先级 {plan.priority}")
 
 
-def print_day(ws: Workspace, day: date, indent: str = "  ") -> None:
+def print_day(ws: Workspace, day: date, today: date, indent: str = "  ") -> None:
     layout = ws.layout(day)
-    marks = ws.milestones_on(day)
+    marks = ws.milestones_on(day, today)
     holiday = ws.profile.holiday_name(day)
     print(f"{format_date(day)} {weekday_cn(day)}" + (f"  祝日 {holiday}" if holiday else ""))
     if ws.profile.uses_holiday_windows(day):
         windows = ws.profile.windows_for(day)
         text = "  ".join(window.describe() for window in windows) if windows else "全天无空"
         print(f"{indent}按祝日时间段  {text}")
-    if not layout.placed and not layout.overflow:
+    if not layout.placed and not layout.overflow and not layout.early:
         print(f"{indent}（没有任务）")
+    for session in layout.early:
+        print(f"{indent}已提前完成  [{session.plan_name}] {session.title}  {session.minutes} 分钟")
     for item in layout.placed:
         extra = "（定时）" if item.window is None else ""
         place = f"  @{item.session.location}" if item.session.location else ""
@@ -89,7 +91,8 @@ def print_day(ws: Workspace, day: date, indent: str = "  ") -> None:
     for session in layout.overflow:
         print(f"{indent}未排入  [{session.plan_name}] {session.title}  {session.minutes} 分钟" + (f"（slot={session.slot}）" if session.slot else ""))
     for plan, milestone in marks:
-        print(f"{indent}里程碑  [{plan.name}] {milestone.text}")
+        state = "（已达成）" if milestone.done else (f"（原定 {format_date(milestone.moved_from)}）" if milestone.moved_from else "")
+        print(f"{indent}里程碑  [{plan.name}] {milestone.text}{state}")
 
 
 def cmd_paths(ws: Workspace, args) -> int:
@@ -183,7 +186,7 @@ def cmd_check(ws: Workspace, args) -> int:
     if args.days > 0 and (ws.plans or ws.task_expansion):
         print(f"时间表预览（{format_date(preview_start)} 起 {args.days} 天）：")
         for offset in range(args.days):
-            print_day(ws, preview_start + timedelta(days=offset))
+            print_day(ws, preview_start + timedelta(days=offset), args.today)
     return 1 if has_error else 0
 
 

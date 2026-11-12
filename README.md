@@ -23,9 +23,10 @@ Windows 桌面计划 App。读取 Markdown 格式的计划文件，按每天的�
 
 - 首次运行时，启动文件夹里会创建“计划本”快捷方式，之后登录 Windows 时自动在托盘启动。可以在“设置”里关闭。快捷方式指向 exe 所在位置，移动 exe 后在“设置”里把开机自启关掉再打开一次。
 - 每次启动时，把 `planner-cli.exe` 的位置和正在使用的数据目录写入 `%APPDATA%\StudyPlanner\app.json`，skill 和命令行工具按这个文件找到 App 的数据。
-- 关闭窗口后 App 缩到托盘继续运行，提醒照常发送。托盘图标的右键菜单里可以查看今天的完成情况和下一项任务、开始番茄钟、暂停任务提醒、跳转到各页面，完全退出要选“退出”。
+- 第一次点窗口的关闭按钮时，询问是最小化到托盘还是退出。选过后不再询问，可以在“设置 → 后台运行”里修改。最小化到托盘后提醒照常发送。托盘图标的右键菜单里可以查看今天的完成情况和下一项任务、开始番茄钟、暂停任务提醒、跳转到各页面，完全退出要选“退出”。
 - 已经在运行时再次双击 exe，会显示已有的窗口。
 - 提醒需要打开 Windows 的通知总开关（设置 → 系统 → 通知）。
+- “设置”页最下方显示版本号。“检查更新”从 GitHub Releases 读取最新的正式版，下载后点“重启并更新”替换同一文件夹里的两个 exe 并重新启动。默认在启动后自动检查一次，可以在“设置”里关闭。
 
 ## 安装 plan-builder skill
 
@@ -80,6 +81,7 @@ Windows 桌面计划 App。读取 Markdown 格式的计划文件，按每天的�
 | `tasks.json` | 临时任务 |
 | `settings.json` | 设置 |
 | `progress.json` | 完成记录和番茄钟记录 |
+| `day_order.json` | 日程页的手动调整，包括拖动后的排序、重排的时刻、改期的任务和提前完成时的前移记录 |
 
 `app.json` 固定放在 `%APPDATA%\StudyPlanner\`，记录最近一次启动的计划本使用的数据目录和命令行工具。
 
@@ -123,7 +125,13 @@ New-Item -ItemType Junction -Path "$env:USERPROFILE\.claude\skills\plan-builder"
 build_exe.bat
 ```
 
-生成 `dist\StudyPlanner.exe`、`dist\planner-cli.exe` 和包含这两个文件的 `dist\StudyPlanner-windows.zip`。脚本最后会等待按键。
+生成 `dist\StudyPlanner.exe`、`dist\planner-cli.exe` 和包含这两个文件的 `dist\StudyPlanner-windows.zip`。开始前检查 `dist` 里的这两个 exe 是否在运行，在运行时询问是否关闭（Y 关闭后继续，N 退出），其他位置的计划本不受影响。任何一步失败时显示失败的步骤，窗口停住等待按键。
+
+发布新版本：
+
+1. 改 `planner_ui.py` 里的 `APP_VERSION`，再运行 `build_exe.bat`。
+2. 在 GitHub 新建 Release，标签写 `v` 加版本号（例如 `v0.3.0`），上传 `dist\StudyPlanner-windows.zip`，文件名不要改。
+3. 不要勾选 pre-release。App 只读取最新的正式版，版本号比自己新时提示更新。
 
 测试：
 

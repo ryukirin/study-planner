@@ -1,6 +1,6 @@
 """开发用：在浏览器里预览界面。静态文件来自 web/，/api/<方法名> 转发给 PlannerApi。
 
-python tools/dev_server.py --home <数据目录> [--port 8765] [--today 2026-11-12]
+python tools/dev_server.py --home <数据目录> [--port 8765] [--today 2026-11-12] [--time 20:10]
 """
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from planner_core.plan_spec import parse_date  # noqa: E402
+from planner_core.plan_spec import parse_date, parse_time  # noqa: E402
 from planner_ui import PlannerApi  # noqa: E402
 
 WEB_DIR = os.path.join(ROOT, "web")
 ALLOWED = {
-    "state", "poll", "reload", "set_done", "save_profile", "add_task", "update_task", "delete_task",
+    "state", "range_days", "poll", "reload", "set_done", "move_session", "reset_day_order", "finish_and_replan", "postpone_session", "restore_session_day", "replan_all", "restore_all_days", "check_update", "start_update", "update_status", "install_update", "close_choice", "save_profile", "add_task", "update_task", "delete_task",
     "archive_plan", "restore_plan", "delete_archived", "save_settings", "test_notification",
     "pomodoro_start", "pomodoro_pause", "pomodoro_resume", "pomodoro_stop", "pomodoro_skip", "pomodoro_tick",
     "open_plans_dir", "open_data_dir", "open_file", "open_url", "open_notification_settings",
@@ -65,8 +65,10 @@ def main() -> None:
     parser.add_argument("--home", required=True)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--today")
+    parser.add_argument("--time", help="固定“完成并重排”和改期用的当前时刻，例如 20:10")
     args = parser.parse_args()
-    Handler.api = PlannerApi(args.home, parse_date(args.today) if args.today else None)
+    Handler.api = PlannerApi(args.home, parse_date(args.today) if args.today else None,
+                             parse_time(args.time) if args.time else None)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), partial(Handler, directory=WEB_DIR))
     print(f"http://127.0.0.1:{args.port}/", flush=True)
     server.serve_forever()
