@@ -10,3 +10,10 @@ plans/
 
 # 个人环境专用的 skill 补充说明
 skills/plan-builder/references/local/
+.coverage
+htmlcov/
+
+# 测试只保留在本地，不上传
+tests/
+docs/测试用例.md
+requirements-dev.txt

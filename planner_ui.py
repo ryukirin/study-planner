@@ -29,7 +29,7 @@ from planner_core.view_model import build_state, find_session, range_payload
 from planner_core.workspace import Workspace, WorkspaceError
 
 APP_TITLE = "计划本"
-APP_VERSION = "0.3.4"
+APP_VERSION = "0.3.5"
 PROFILE_FIELDS = ("version", "buffer_minutes", "weekly", "exceptions", "holidays", "holiday")
 SHORTCUT_NAME = "计划本.lnk"
 SKILL_NAME = "plan-builder"
@@ -489,8 +489,9 @@ class PlannerApi:
             if self._update_job["stage"] == "downloading":
                 return {"ok": True, **self._update_job}
             self._update_job = {"stage": "downloading", "version": info["latest"], "received": 0, "total": info["asset"]["size"]}
+            started = dict(self._update_job)  # 下载很快结束时，返回的仍是开始时的状态
         threading.Thread(target=self._download_update, args=(info,), daemon=True).start()
-        return {"ok": True, **self._update_job}
+        return {"ok": True, **started}
 
     def _download_update(self, info: dict[str, Any]) -> None:
         def progress(received: int, total: int) -> None:

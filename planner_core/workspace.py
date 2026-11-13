@@ -24,6 +24,7 @@ REPLAN_EXTRA_DAYS = 28  # 全部重排时，最后一个任务之后还可以往
 
 
 MILESTONE_MATCH = 4  # 任务标题和里程碑文字里相同的一段至少有几个字，才算相关
+MILESTONE_WRAP_DAYS = 7  # 里程碑在最后一项相关任务之后几天以内，算作这些任务的完成点
 
 
 def _shared_words(title: str, text: str) -> str:
@@ -252,12 +253,12 @@ class Workspace:
 
         跟随的任务：计划里按周重复、原定日期不晚于里程碑的任务中，和里程碑相关的那些。
         里程碑写了 tasks 时，任务模板的标题包含其中一个词或使用其中一个序列就相关。
-        没写时，任务模板标题的开头（第一个花括号或冒号之前）出现在里程碑的 text 里，或任务使用的序列标题出现在 text 里就相关。
+        没写时，任务模板标题和 text 有共同的词就相关（见 _shared_words），或任务使用的序列标题出现在 text 里。
         一个相关的任务也没有时，跟随全部按周重复的任务。
 
-        每项任务的完成日期：已完成的按完成的那天，没完成的按现在排的日期，逾期的按今天。
-        - 全部完成：里程碑已达成，日期是最后一项完成的那天。
-        - 没有全部完成：里程碑和最后一项原定的任务保持原来的间隔，日期 = 原定日期 + (最晚的完成日期 - 最后一项任务原定的日期)。
+        每项任务的日期：已完成的取完成的那天，没完成的取现在排的日期，逾期的取今天。最晚的一个记为“最后一项的日期”。
+        - 里程碑原定在最后一项任务原定日期之后 MILESTONE_WRAP_DAYS 天以内：日期就是最后一项的日期，全部完成时标为已达成。
+        - 隔得更远：里程碑还要等任务以外的结果，保持原来的间隔平移，不会自动标为已达成。
         没有任务可以跟随时，里程碑不动。"""
         key = (len(self.progress.records), today)
         cached = self._milestone_cache.get(plan.id)
@@ -278,9 +279,16 @@ class Workspace:
                     finishes.append(moment.date() if moment else session.day)
                 else:
                     finishes.append(max(session.day, today))
-            done = all(self.progress.is_done(session.uid) for session in related)
             last = max(finishes)
-            day = last if done else item.day + (last - max(session.moved_from or session.day for session in related))
+            gap = item.day - max(session.moved_from or session.day for session in related)
+            if gap.days <= MILESTONE_WRAP_DAYS:
+                # 里程碑写在最后一项任务之后一周以内：这些任务做完就是达成，日期跟着最后一项走
+                done = all(self.progress.is_done(session.uid) for session in related)
+                day = last
+            else:
+                # 隔了一周以上：里程碑还要等任务以外的结果（例如面试结果），只按任务的提前、推后平移日期
+                done = False
+                day = item.day + (last - (item.day - gap))
             result.append(Milestone(day=day, text=item.text, note=item.note, tasks=item.tasks,
                                     moved_from=item.day if day != item.day else None, done=done, follows=follows))
         result.sort(key=lambda item: item.day)

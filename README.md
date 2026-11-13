@@ -137,19 +137,13 @@ build_exe.bat
 2. 在 GitHub 新建 Release，标签写 `v` 加版本号（例如 `v0.3.0`），上传 `dist\StudyPlanner-windows.zip`，文件名不要改。
 3. 不要勾选 pre-release。App 只读取最新的正式版，版本号比自己新时提示更新。
 
-测试：
-
-```bat
-python -m unittest discover -s tests -t .
-```
-
 在浏览器里预览界面：
 
 ```bat
-python tools\dev_server.py --home <测试数据目录> [--today 2026-11-12] [--time 21:30]
+python tools\dev_server.py --home <数据目录> [--today 2026-11-12] [--time 21:30]
 ```
 
-打开 http://127.0.0.1:8765/ 。`--home` 指向测试数据目录，真实数据不受影响。浏览器预览中没有托盘和系统通知。
+打开 http://127.0.0.1:8765/ 。`--home` 指向单独的数据目录，真实数据不受影响。浏览器预览中没有托盘和系统通知。
 
 ## 已知限制
 
