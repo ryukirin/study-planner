@@ -110,6 +110,13 @@ class DownloadTest(unittest.TestCase):
             updater.download(self.asset(b"not a zip"), self.dir, opener=opener_for(b"not a zip"))
 
 
+class LaunchEnvironmentTest(unittest.TestCase):
+    def test_new_version_does_not_reuse_the_old_process_files(self):
+        env = updater.launch_environment({"PATH": "C:/x", "_PYI_APPLICATION_HOME_DIR": "C:/tmp/_MEI1", "_PYI_ARCHIVE_FILE": "a.exe",
+                                          "_PYI_PARENT_PROCESS_LEVEL": "1", "_MEIPASS2": "C:/tmp/_MEI1"})
+        self.assertEqual(env, {"PATH": "C:/x", "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+
+
 class InstallTest(unittest.TestCase):
     def setUp(self):
         self._dir = tempfile.TemporaryDirectory()

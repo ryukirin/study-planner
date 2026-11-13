@@ -23,6 +23,29 @@ from .timeutil import format_time
 REPLAN_EXTRA_DAYS = 28  # 全部重排时，最后一个任务之后还可以往后排的天数
 
 
+MILESTONE_MATCH = 4  # 任务标题和里程碑文字里相同的一段至少有几个字，才算相关
+
+
+def _shared_words(title: str, text: str) -> str:
+    """任务标题和里程碑文字共有的词，没有时返回空字符串。
+
+    以下两种算共有：标题的开头（第一个花括号或冒号之前）整段出现在里程碑文字里，
+    或者两者有一段至少 MILESTONE_MATCH 个字完全相同。例如“按周老师反馈修改面接原稿：Q1-12”
+    和“面接原稿修正完了”共有“面接原稿”。"""
+    head = re.split(r"[{：:（(，,]", title)[0].strip()
+    if len(head) >= 2 and head in text:
+        return head
+    plain = re.sub(r"\{[^}]*\}", " ", title)
+    best = ""
+    for start in range(len(plain)):
+        for end in range(len(plain), start + max(len(best), MILESTONE_MATCH - 1), -1):
+            piece = plain[start:end]
+            if piece.strip() == piece and piece in text:
+                best = piece
+                break
+    return best if len(best) >= MILESTONE_MATCH else ""
+
+
 @dataclass
 class PlanFileError:
     path: str
@@ -284,8 +307,9 @@ class Workspace:
                 hits = [word for word in milestone.tasks
                         if word in template.title or word == template.uses or (sequence and word == sequence.title)]
             else:
-                head = re.split(r"[{：:（(，,]", template.title)[0].strip()
-                hits = [word for word in (head, sequence.title if sequence else "") if len(word) >= 2 and word in milestone.text]
+                hits = [word for word in (_shared_words(template.title, milestone.text),
+                                          sequence.title if sequence and len(sequence.title) >= 2 and sequence.title in milestone.text else "")
+                        if word]
             if hits:
                 related.append(session)
                 follows.extend(word for word in hits if word not in follows)

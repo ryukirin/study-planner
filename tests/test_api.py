@@ -517,6 +517,19 @@ class ReplanApiTest(unittest.TestCase):
         self.assertEqual(task_spans(ws.plans[0], ws.expansions["demo"]), before)
 
 
+class MilestoneMatchTest(unittest.TestCase):
+    def test_shared_words(self):
+        from planner_core.workspace import _shared_words
+        # 标题的开头出现在里程碑文字里
+        self.assertEqual(_shared_words("精读：第 {n} 篇", "精读第一轮完成"), "精读")
+        # 标题中间有一段至少 4 个字和里程碑相同
+        self.assertEqual(_shared_words("按周老师反馈修改面接原稿：Q1-12", "面接原稿修正完了"), "面接原稿")
+        self.assertEqual(_shared_words("面接原稿 朗读计时：{p}", "面接原稿修正完了"), "面接原稿")
+        # 只有两三个字相同时不算
+        self.assertEqual(_shared_words("技术面试准备：{tech}", "周老师模拟面试完成"), "")
+        self.assertEqual(_shared_words("更新转职管理表并确认下周安排", "面接原稿修正完了"), "")
+
+
 class ApiExtensionTest(unittest.TestCase):
     def setUp(self):
         self.home = TempHome()

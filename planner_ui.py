@@ -29,7 +29,7 @@ from planner_core.view_model import build_state, find_session, range_payload
 from planner_core.workspace import Workspace, WorkspaceError
 
 APP_TITLE = "计划本"
-APP_VERSION = "0.3.3"
+APP_VERSION = "0.3.4"
 PROFILE_FIELDS = ("version", "buffer_minutes", "weekly", "exceptions", "holidays", "holiday")
 SHORTCUT_NAME = "计划本.lnk"
 SKILL_NAME = "plan-builder"
@@ -515,7 +515,7 @@ class PlannerApi:
             return {"ok": False, "error": "新版本还没有下载完成"}
         try:
             exe = updater.install(job["files"], os.path.dirname(sys.executable))
-            subprocess.Popen([exe, "--wait-pid", str(os.getpid())], close_fds=True,
+            subprocess.Popen([exe, "--wait-pid", str(os.getpid())], close_fds=True, env=updater.launch_environment(),
                              creationflags=getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
         except (updater.UpdateError, OSError) as exc:
             return {"ok": False, "error": str(exc)}

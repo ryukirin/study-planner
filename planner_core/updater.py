@@ -179,6 +179,18 @@ def install(files_dir: str, target_dir: str) -> str:
     return os.path.join(target_dir, APP_EXE)
 
 
+def launch_environment(base: dict[str, str] | None = None) -> dict[str, str]:
+    """启动新版本 exe 用的环境变量。
+
+    打包后的 exe 运行时，PyInstaller 在环境变量里记录了自己解压出来的临时文件夹。新版本继承这些变量时，
+    会以为自己是旧进程的子进程，直接使用旧进程的临时文件夹。旧进程退出后这个文件夹被删除，
+    新版本就找不到 WebView2 等文件而启动失败。PYINSTALLER_RESET_ENVIRONMENT 让新版本按全新启动处理。"""
+    env = {key: value for key, value in (os.environ if base is None else base).items()
+           if not key.startswith("_PYI_") and key != "_MEIPASS2"}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def cleanup_old(target_dir: str) -> None:
     """删除上次更新留下的 *.exe.old。旧进程还没退出时删不掉，下次启动再删。"""
     for name in EXE_NAMES:
