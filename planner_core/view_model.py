@@ -120,7 +120,8 @@ def day_payload(ws: Workspace, day: date, today: date | None = None) -> dict[str
         "manual_order": ws.day_order.has(format_date(day)),
         "groups": groups,
         "fixed": [session_payload(ws, item.session, item.start, item.end) for item in layout.fixed],
-        "overflow": [{**session_payload(ws, session, unplaced=True), "reason": overflow_reason(layout, session, at)}
+        "overflow": [{**session_payload(ws, session, unplaced=True),
+                      "reason": None if ws.is_done(session.uid) else overflow_reason(layout, session, at)}
                      for session in layout.overflow],
         "early": [session_payload(ws, session, early=True) for session in layout.early],
         "replan_at": format_time(at) if at is not None else None,

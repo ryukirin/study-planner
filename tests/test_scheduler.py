@@ -103,9 +103,12 @@ class ReplanTest(unittest.TestCase):
 
     def test_done_tasks_use_actual_time_only_when_needed(self):
         base = layout_day(DAY, self.sessions, self.windows, 5)
-        # a 排在 21:00 之前，也在之前完成：保持原位
+        # a 排在 20:00–20:30，20:25 完成：显示为实际用掉的 20:00–20:25
         layout = replan_day(base, parse_time("21:00"), 5, {"p|a": parse_time("20:25")})
-        self.assertEqual(self.times(layout)[:2], [("a", parse_time("20:00"), parse_time("20:30")), ("b", parse_time("21:00"), parse_time("21:40"))])
+        self.assertEqual(self.times(layout)[:2], [("a", parse_time("20:00"), parse_time("20:25")), ("b", parse_time("21:00"), parse_time("21:40"))])
+        # 排定的时间过去以后才勾选：按排定的时间显示
+        layout = replan_day(base, parse_time("21:00"), 5, {"p|a": parse_time("20:50")})
+        self.assertEqual(self.times(layout)[0], ("a", parse_time("20:00"), parse_time("20:30")))
         # 20:10 重排后，a 在 20:40 才勾完成：a 记为 20:10–20:40，后面的任务排在它之后
         layout = replan_day(base, parse_time("20:10"), 5, {"p|a": parse_time("20:40")})
         self.assertEqual(self.times(layout), [
@@ -141,6 +144,30 @@ class ReplanTest(unittest.TestCase):
         self.assertEqual(self.times(layout), [
             ("a", parse_time("20:00"), parse_time("20:10")), ("b", parse_time("20:10"), parse_time("20:50")),
             ("c", parse_time("20:55"), parse_time("21:15")), ("播客", parse_time("21:20"), parse_time("22:00"))])
+        self.assertEqual(layout.overflow, [])
+
+    def test_tasks_finished_one_after_another_do_not_overlap(self):
+        base = layout_day(DAY, self.sessions, self.windows, 5)
+        # 三项依次在 19:40、19:52、19:55 勾选：中间留出 5 分钟休息，不足 5 分钟时从上一项完成时算起
+        done = {"p|a": parse_time("19:40"), "p|b": parse_time("19:52"), "p|c": parse_time("19:55")}
+        layout = replan_day(base, parse_time("19:55"), 5, done)
+        self.assertEqual(self.times(layout), [
+            ("a", parse_time("19:10"), parse_time("19:40")), ("b", parse_time("19:45"), parse_time("19:52")),
+            ("c", parse_time("19:52"), parse_time("19:55"))])
+        # 间隔按空闲时间里设定的值：设为 10 分钟时，b 从 19:50 开始
+        layout = replan_day(base, parse_time("19:55"), 10, done)
+        self.assertEqual(self.times(layout)[1], ("b", parse_time("19:50"), parse_time("19:52")))
+
+    def test_done_task_that_was_unplaced_is_shown_at_its_done_time(self):
+        extra = session("d", 30, "focus", order=3)
+        base = layout_day(DAY, self.sessions + [extra], self.windows, 5)
+        self.assertEqual([item.title for item in base.overflow], ["d"])
+        # a、b 做完，d 本来没排进去，21:10 也做完了：b 20:40 完成，休息 5 分钟后开始 d，记为 20:45–21:10
+        done = {"p|a": parse_time("20:05"), "p|b": parse_time("20:40"), "p|d": parse_time("21:10")}
+        layout = replan_day(base, parse_time("21:10"), 5, done)
+        placed = {item.session.title: (item.start, item.end, item.window.tag) for item in layout.placed}
+        self.assertEqual(placed["d"], (parse_time("20:45"), parse_time("21:10"), "focus"))
+        self.assertEqual(placed["c"], (parse_time("21:10"), parse_time("21:30"), "focus"))
         self.assertEqual(layout.overflow, [])
 
     def test_fixed_task_done_early_frees_its_time(self):

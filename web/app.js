@@ -469,7 +469,8 @@ function dayView() {
       ...day.groups.map((g) => {
         const w = g.window;
         const items = [...g.tasks, ...(fixedIn.get(g) || [])].sort((a, b) => toMin(a.start) - toMin(b.start));
-        const tasks = items.map((t) => taskHtml(t, { fixedMark: true, drag: true })).join('')
+        // 重排过的日子里，做完的任务按完成时刻显示，不能拖动
+        const tasks = items.map((t) => taskHtml(t, { fixedMark: true, drag: !(day.replan_at && t.done) })).join('')
           || `<div class="slot-empty">${g.passed ? `已经过去，${esc(day.replan_at)} 起重排时没有放任务` : '没有安排任务'}</div>`;
         const lastEnd = Math.max(toMin(w.start), ...items.map((t) => Math.min(toMin(t.end), toMin(w.end))));
         const free = toMin(w.end) - lastEnd;
@@ -496,13 +497,15 @@ function dayView() {
   }
 
   let overflow = '';
+  // 做完的任务不算作没排进空闲时间
+  const unplaced = day.overflow.filter((t) => !t.done).length;
   if (day.overflow.length) {
     overflow = `
       <div class="section">
-        <div class="alert warn">${icon('alert')}<div><strong>${day.overflow.length} 项任务没排进空闲时间</strong><br>
+        ${unplaced ? `<div class="alert warn">${icon('alert')}<div><strong>${unplaced} 项任务没排进空闲时间</strong><br>
           <span class="muted">空闲时间不够，或没有类型匹配的时间段。可以拖到有空余的时间段，在“空闲时间”页加时间，或让 skill 调整计划。</span></div>
-          <button class="link" data-action="view" data-view="profile">调整空闲时间</button></div>
-        <div style="margin-top:10px">${day.overflow.map((t) => taskHtml(t, { drag: day.groups.length > 0 })).join('')}</div>
+          <button class="link" data-action="view" data-view="profile">调整空闲时间</button></div>` : ''}
+        <div style="margin-top:10px">${day.overflow.map((t) => taskHtml(t, { drag: day.groups.length > 0 && !t.done })).join('')}</div>
       </div>`;
   }
 

@@ -101,6 +101,40 @@ def layout_day(day: date, sessions: list[Session], windows: list[Window], buffer
     return DayLayout(day=day, windows=ordered_windows, placed=placed, overflow=overflow)
 
 
+def _finished_placements(finished: list[tuple[Session, int | None, Window | None, Placement | None]],
+                         at: int, buffer_minutes: int) -> list[Placement]:
+    """已完成任务实际用掉的时间段。finished 的每项是 (任务, 完成时刻, 时间段, 原来的安排)。
+
+    按完成时刻依次计算，每项在完成时刻结束，开始时刻取以下三者中最晚的：
+    完成时刻减去任务时长、原来排定的开始时刻（早于完成时刻时）、上一项完成的时刻加上任务之间的间隔。
+    上一项完成到这一项完成不足一个间隔时，从上一项完成的时刻算起。连续勾选的几项因此不会互相重叠。
+
+    以下两种保持原来的安排：排定的时间已经过去之后才勾选的（时间早于 at），以及不在当天完成、原来排在 at 之前的。
+    不在当天完成、原来排在 at 之后的，记为在 at 完成。"""
+    result: list[Placement] = []
+    previous: int | None = None
+    order = sorted(finished, key=lambda entry: (entry[1] is None, entry[1] or 0))
+    for session, minute, window, item in order:
+        if minute is None:
+            if item is not None and item.end <= at:
+                result.append(item)
+                continue
+            minute = at
+        if item is not None and item.end < minute and item.end <= at:
+            result.append(item)
+            continue
+        earliest = max(minute - session.minutes, 0)
+        if item is not None and item.start < minute:
+            earliest = max(earliest, item.start)
+        start = earliest
+        if previous is not None and previous < minute:
+            after_break = previous + buffer_minutes
+            start = max(earliest, after_break if after_break < minute else previous)
+        result.append(Placement(session, start, minute, window))
+        previous = minute
+    return result
+
+
 def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, int | None],
                manual: dict[int, list[str]] | None = None) -> DayLayout:
     """从 at 时刻起重排一天里还没做的任务。
@@ -108,35 +142,39 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
     base 是 layout_day 的结果。done 是已完成任务的完成时刻（当天的分钟数，不在当天完成的为 None）。
 
     - 没完成的定时任务不动。
-    - 已完成的任务（包括定时任务）不再占用后面的时间。原来排在 at 之前、也在 at 之前完成的保持原位。
-      提前完成的（原来排在 at 之后）和 at 之后才完成的，改为在完成时刻结束。
+    - 已完成的任务（包括定时任务）按实际用掉的时间显示，规则见 _finished_placements。
     - 没完成的任务全部重排：按 base 里的先后顺序，从 at 起放进时间段，避开定时任务和已完成任务占用的时间。
       能放进原来的时间段或 tag 匹配的时间段，取最早放得下的一个，都放不下进入未排入。
-    - 原来未排入的任务排在最后重新尝试。
+    - 原来未排入的任务排在最后重新尝试。已经做完的按完成时刻显示，不再算作未排入。
     - manual 是手动排序，格式和 layout_day 的一样。列出的没完成的任务排在前面，先试指定的时间段，不检查 tag。
       已完成的任务腾出了时间，所以 layout_day 里放不下的手动条目在这里可能放得下。"""
     frozen: list[Placement] = []
     waiting: list[tuple[Session, Window | None]] = []
+    finished: list[tuple[Session, int | None, Window | None, Placement | None]] = []
     for item in base.placed:
         session = item.session
         if session.uid in done:
-            minute = done[session.uid]
-            if minute is None and item.end > at:
-                minute = at
-            if minute is not None and (minute > at or item.end > at):
-                # 开始时刻按时长倒推。原来的开始时刻已经过了的，不早于原来的开始时刻
-                start = max(minute - session.minutes, 0)
-                if item.start < minute:
-                    start = max(start, item.start)
-                frozen.append(Placement(session, start, minute, item.window))
-            else:
-                frozen.append(item)
+            finished.append((session, done[session.uid], item.window, item))
         elif session.is_fixed:
             frozen.append(item)
         else:
             waiting.append((session, item.window))
-    overflow = [session for session in base.overflow if session.uid in done]
-    waiting.extend((session, None) for session in base.overflow if session.uid not in done)
+    overflow: list[Session] = []
+    for session in base.overflow:
+        if session.uid not in done:
+            waiting.append((session, None))
+            continue
+        # 原来没排进去、后来做完的任务：按完成时刻显示在 tag 匹配的时间段里，占用实际用掉的时间
+        minute = done[session.uid] if done[session.uid] is not None else at
+        matching = [window for window in base.windows if not session.slot or window.tag == session.slot]
+        # 放进完成时刻所在的时间段。不在任何时间段里时，放进完成时刻之前最近的一个
+        earlier = [window for window in matching if window.start < minute]
+        home = earlier[-1] if earlier else (matching[0] if matching else None)
+        if home is None:
+            overflow.append(session)
+        else:
+            finished.append((session, minute, home, None))
+    frozen.extend(_finished_placements(finished, at, buffer_minutes))
     undone = {session.uid: session for session, _ in waiting}
     queue: list[tuple[Session, Window | None, bool]] = []
     pinned: set[str] = set()
