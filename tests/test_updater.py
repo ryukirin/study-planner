@@ -2,6 +2,7 @@ import hashlib
 import io
 import json
 import os
+import ssl
 import tempfile
 import unittest
 import zipfile
@@ -20,7 +21,7 @@ class FakeResponse(io.BytesIO):
 
 
 def opener_for(payload: bytes):
-    return lambda request, timeout=None: FakeResponse(payload)
+    return lambda request, timeout=None, context=None: FakeResponse(payload)
 
 
 def make_zip(files: dict[str, bytes]) -> bytes:
@@ -57,13 +58,21 @@ class VersionTest(unittest.TestCase):
     def test_fetch_latest_sends_generic_user_agent(self):
         seen = {}
 
-        def opener(request, timeout=None):
+        def opener(request, timeout=None, context=None):
             seen["agent"] = request.get_header("User-agent")
             seen["url"] = request.full_url
+            seen["context"] = context
             return FakeResponse(json.dumps(release()).encode("utf-8"))
 
         self.assertEqual(updater.fetch_latest(opener)["tag_name"], "v0.3.0")
-        self.assertEqual(seen, {"agent": updater.USER_AGENT, "url": updater.LATEST_URL})
+        self.assertEqual((seen["agent"], seen["url"]), (updater.USER_AGENT, updater.LATEST_URL))
+        self.assertIsInstance(seen["context"], ssl.SSLContext)
+
+    def test_ssl_context_adds_certifi_roots(self):
+        import certifi
+        system = len(ssl.create_default_context().get_ca_certs())
+        self.assertGreater(len(updater.ssl_context().get_ca_certs()), system)
+        self.assertTrue(os.path.exists(certifi.where()))
 
 
 class DownloadTest(unittest.TestCase):

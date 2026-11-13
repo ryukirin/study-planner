@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import shutil
+import ssl
 import zipfile
 from typing import Any, Callable
 from urllib.error import URLError
@@ -46,10 +47,25 @@ def _request(url: str, accept: str) -> Request:
     return Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept})
 
 
+def ssl_context() -> ssl.SSLContext:
+    """Windows 证书库加上 certifi 的根证书。
+
+    Windows 只在浏览器等系统组件用到某个根证书时才把它下载到证书库，Python 读不到还没下载的根证书，
+    这时连接 GitHub 会报 CERTIFICATE_VERIFY_FAILED。certifi 带有完整的根证书列表，补上这部分。"""
+    context = ssl.create_default_context()
+    try:
+        import certifi
+
+        context.load_verify_locations(certifi.where())
+    except (ImportError, OSError):
+        pass
+    return context
+
+
 def fetch_latest(opener: Callable[..., Any] = urlopen) -> dict[str, Any]:
     """读取最新正式版的信息（GitHub API 的原始 JSON）。"""
     try:
-        with opener(_request(LATEST_URL, "application/vnd.github+json"), timeout=TIMEOUT) as response:
+        with opener(_request(LATEST_URL, "application/vnd.github+json"), timeout=TIMEOUT, context=ssl_context()) as response:
             return json.loads(response.read().decode("utf-8"))
     except URLError as exc:
         raise UpdateError(f"无法连接 GitHub：{getattr(exc, 'reason', exc)}") from exc
@@ -89,7 +105,7 @@ def download(asset: dict[str, Any], dest_dir: str, progress: Callable[[int, int]
     digest = hashlib.sha256()
     received = 0
     try:
-        with opener(_request(asset["url"], "application/octet-stream"), timeout=TIMEOUT) as response, open(part, "wb") as handle:
+        with opener(_request(asset["url"], "application/octet-stream"), timeout=TIMEOUT, context=ssl_context()) as response,                 open(part, "wb") as handle:
             while True:
                 chunk = response.read(CHUNK)
                 if not chunk:
