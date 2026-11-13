@@ -143,6 +143,21 @@ class ReplanTest(unittest.TestCase):
             ("c", parse_time("20:55"), parse_time("21:15")), ("播客", parse_time("21:20"), parse_time("22:00"))])
         self.assertEqual(layout.overflow, [])
 
+    def test_fixed_task_done_early_frees_its_time(self):
+        fixed = session("定时", 30, order=3)
+        fixed.fixed_start = parse_time("20:35")
+        base = layout_day(DAY, self.sessions + [fixed], self.windows, 5)
+        # a 20:00–20:30，定时 20:35–21:05，b 21:10–21:50，c 放不下
+        self.assertEqual([item.title for item in base.overflow], ["c"])
+        # 定时任务 20:10 就做完了：记为 19:40–20:10，原来的时间让给 a、b、c
+        layout = replan_day(base, parse_time("20:10"), 5, {"p|定时": parse_time("20:10")})
+        self.assertEqual(self.times(layout), [
+            ("定时", parse_time("19:40"), parse_time("20:10")), ("a", parse_time("20:10"), parse_time("20:40")),
+            ("b", parse_time("20:45"), parse_time("21:25")), ("c", parse_time("21:30"), parse_time("21:50"))])
+        # 没做完的定时任务仍然占着原来的时间
+        layout = replan_day(base, parse_time("20:10"), 5, {})
+        self.assertIn(("定时", parse_time("20:35"), parse_time("21:05")), self.times(layout))
+
     def test_missed_task_moves_to_a_matching_window_or_overflow(self):
         sessions = [session("听力", 20, "commute"), session("精读", 30, "focus", order=1), session("随便", 5, order=2)]
         base = layout_day(DAY, sessions, self.windows, 5)

@@ -107,8 +107,8 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
 
     base 是 layout_day 的结果。done 是已完成任务的完成时刻（当天的分钟数，不在当天完成的为 None）。
 
-    - 定时任务不动。
-    - 已完成的任务不再占用后面的时间。原来排在 at 之前、也在 at 之前完成的保持原位。
+    - 没完成的定时任务不动。
+    - 已完成的任务（包括定时任务）不再占用后面的时间。原来排在 at 之前、也在 at 之前完成的保持原位。
       提前完成的（原来排在 at 之后）和 at 之后才完成的，改为在完成时刻结束。
     - 没完成的任务全部重排：按 base 里的先后顺序，从 at 起放进时间段，避开定时任务和已完成任务占用的时间。
       能放进原来的时间段或 tag 匹配的时间段，取最早放得下的一个，都放不下进入未排入。
@@ -119,9 +119,7 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
     waiting: list[tuple[Session, Window | None]] = []
     for item in base.placed:
         session = item.session
-        if session.is_fixed:
-            frozen.append(item)
-        elif session.uid in done:
+        if session.uid in done:
             minute = done[session.uid]
             if minute is None and item.end > at:
                 minute = at
@@ -133,6 +131,8 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
                 frozen.append(Placement(session, start, minute, item.window))
             else:
                 frozen.append(item)
+        elif session.is_fixed:
+            frozen.append(item)
         else:
             waiting.append((session, item.window))
     overflow = [session for session in base.overflow if session.uid in done]
