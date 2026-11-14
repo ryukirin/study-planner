@@ -22,7 +22,7 @@ ALLOWED = {
     "state", "range_days", "poll", "reload", "set_done", "move_session", "reset_day_order", "finish_and_replan", "postpone_session", "restore_session_day", "replan_all", "restore_all_days", "check_update", "start_update", "update_status", "install_update", "close_choice", "save_profile", "add_task", "update_task", "delete_task",
     "archive_plan", "restore_plan", "delete_archived", "save_settings", "test_notification",
     "pomodoro_start", "pomodoro_pause", "pomodoro_resume", "pomodoro_stop", "pomodoro_skip", "pomodoro_tick",
-    "open_plans_dir", "open_data_dir", "open_file", "open_url", "open_notification_settings",
+    "open_plans_dir", "open_data_dir", "open_file", "open_url", "open_notification_settings", "copy_text",
 }
 
 

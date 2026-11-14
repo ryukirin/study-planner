@@ -112,6 +112,49 @@ def wait_for_process(pid: int, seconds: float = 30) -> None:
         kernel32.CloseHandle(handle)
 
 
+def set_clipboard_text(text: str) -> None:
+    """把文字写入 Windows 剪贴板。WebView2 里网页的剪贴板接口可能被拒绝，所以由后端写入。"""
+    if sys.platform != "win32":
+        raise OSError("只支持 Windows")
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+
+    data = ctypes.create_unicode_buffer(text)
+    size = ctypes.sizeof(data)
+    for _ in range(10):  # 其他程序正在用剪贴板时稍等再试
+        if user32.OpenClipboard(None):
+            break
+        time.sleep(0.05)
+    else:
+        raise OSError("剪贴板被其他程序占用")
+    try:
+        user32.EmptyClipboard()
+        handle = kernel32.GlobalAlloc(0x0002, size)  # GMEM_MOVEABLE
+        if not handle:
+            raise OSError("无法分配内存")
+        pointer = kernel32.GlobalLock(handle)
+        ctypes.memmove(pointer, data, size)
+        kernel32.GlobalUnlock(handle)
+        if not user32.SetClipboardData(13, handle):  # CF_UNICODETEXT。成功后内存归系统管理
+            kernel32.GlobalFree(handle)
+            raise OSError("写入剪贴板失败")
+    finally:
+        user32.CloseClipboard()
+
+
 def autostart_supported() -> bool:
     """只有打包后的 exe、且使用默认数据目录时才管理开机自启。"""
     return sys.platform == "win32" and getattr(sys, "frozen", False) and not os.environ.get(paths.ENV_HOME)
@@ -730,6 +773,15 @@ class PlannerApi:
         if not isinstance(url, str) or not url.startswith(("http://", "https://")):
             return {"ok": False, "error": "只能打开 http 或 https 链接"}
         webbrowser.open(url)
+        return {"ok": True}
+
+    def copy_text(self, text: str) -> dict[str, Any]:
+        if not isinstance(text, str) or not text or len(text) > 10000:
+            return {"ok": False, "error": "没有可复制的内容"}
+        try:
+            set_clipboard_text(text)
+        except OSError as exc:
+            return {"ok": False, "error": f"复制失败：{exc}"}
         return {"ok": True}
 
     @staticmethod

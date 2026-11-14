@@ -678,11 +678,49 @@ function plansView() {
 }
 
 /* 简单的 Markdown 渲染：标题、列表、表格、段落、加粗、行内代码、链接 */
+/* 链接用系统浏览器打开，后面跟一个复制按钮 */
+function linkHtml(label, url) {
+  return `<a data-action="open-url" data-url="${url}" title="${url}">${label}</a><button class="link-copy" data-action="copy-url" data-url="${url}" title="复制链接" aria-label="复制链接">${icon('copy', 'xs')}</button>`;
+}
+
 function inlineMd(text) {
+  /* [文字](网址) 和直接写的网址都变成链接。网址只取 ASCII 字符，末尾的标点不算在内 */
   return esc(text)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'*+,;=%()[\]]+)/g, (all, label, url, bare) => {
+      if (url) return linkHtml(label, url);
+      let link = bare;
+      let tail = '';
+      while (/[.,;:!?)\]]$/.test(link) && !/&[a-z#0-9]+;$/i.test(link)) {
+        if (link.endsWith(')') && (link.match(/\(/g) || []).length >= (link.match(/\)/g) || []).length) break;
+        tail = link.slice(-1) + tail;
+        link = link.slice(0, -1);
+      }
+      return linkHtml(link, link) + tail;
+    })
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a data-action="open-url" data-url="$2" title="$2">$1</a>');
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+/* 先由后端写入系统剪贴板，失败时用网页的剪贴板接口。返回是否复制成功 */
+async function copyText(text) {
+  try {
+    const res = await call('copy_text', text);
+    if (res && res.ok) return true;
+  } catch { /* 后端不可用时继续 */ }
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand('copy');
+    area.remove();
+    return ok;
+  }
 }
 
 function markdown(src) {
@@ -1044,6 +1082,10 @@ document.addEventListener('click', async (event) => {
   } else if (action === 'open-dir') report(await call('open_plans_dir'));
   else if (action === 'open-file') report(await call('open_file', el.dataset.path));
   else if (action === 'open-url') { event.preventDefault(); report(await call('open_url', el.dataset.url)); }
+  else if (action === 'copy-url') {
+    if (await copyText(el.dataset.url)) toast('已复制链接');
+    else toast('复制失败，可以选中链接后按 Ctrl+C', true);
+  }
   else if (action === 'reload') { await call('reload'); await refresh(); toast('已重新加载'); }
   else if (action === 'add-win') windowDialog(el.dataset.key);
   else if (action === 'edit-win') windowDialog(el.dataset.key, Number(el.dataset.i));
