@@ -30,7 +30,7 @@ from planner_core.view_model import build_state, find_session, range_payload
 from planner_core.workspace import Workspace, WorkspaceError
 
 APP_TITLE = "计划本"
-APP_VERSION = "0.3.5"
+APP_VERSION = "0.4.0"
 PROFILE_FIELDS = ("version", "buffer_minutes", "weekly", "exceptions", "holidays", "holiday")
 SHORTCUT_NAME = "计划本.lnk"
 SKILL_NAME = "plan-builder"
