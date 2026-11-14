@@ -214,6 +214,7 @@ function renderSidebar() {
     <div class="brand"><img class="logo" src="logo.png" alt="">计划本</div>
     <nav class="nav">${nav}</nav>
     ${!S.pomo || S.pomo.mode === 'idle' ? `<button class="btn focus-start" data-action="pomo-start">${icon('timer', 'sm')}开始专注</button>` : ''}
+    ${levelMini()}
     <div>${calendarHtml()}</div>
     <div><div class="side-title">计划</div>${plans}</div>
     <div class="side-foot">
@@ -1120,6 +1121,16 @@ document.addEventListener('click', async (event) => {
     await refresh();
   }
   else if (action === 'open-data-dir') report(await call('open_data_dir'));
+  else if (action === 'title-reset') await saveLevels({ titles: { ...S.state.settings.levels.titles, [el.dataset.level]: '' } });
+  else if (action === 'show-add') {
+    const show = { title: $('#show-title').value.trim(), episodes: Number($('#show-episodes').value), minutes_per_episode: Number($('#show-minutes').value) };
+    if (!show.title) { toast('请填写剧名', true); return; }
+    await saveLevels({ custom_shows: [...S.state.settings.levels.custom_shows, show] });
+  }
+  else if (action === 'show-del') {
+    const shows = S.state.settings.levels.custom_shows.filter((_, i) => i !== Number(el.dataset.index));
+    await saveLevels({ custom_shows: shows });
+  }
   else if (action === 'check-update') checkUpdate();
   else if (action === 'start-update') {
     const res = await call('start_update');
@@ -1146,6 +1157,11 @@ document.addEventListener('change', async (event) => {
     const res = await call('save_settings', data);
     if (!res.ok) toast(res.errors.join('\n'), true); else toast('已保存');
     await refresh();
+    return;
+  }
+  if (event.target.dataset && event.target.dataset.titleLevel !== undefined) {
+    const titles = { ...S.state.settings.levels.titles, [event.target.dataset.titleLevel]: event.target.value };
+    await saveLevels({ titles });
     return;
   }
   if (event.target.id === 'holidays-jp') {
@@ -1601,6 +1617,7 @@ function pomoFullHtml(p, focus, remain, modeLabel, actions) {
         </div>
       </div>
       <div class="pomo-sub num">${sub}</div>
+      ${levelLine()}
       <div class="pomo-actions-lg">${actions}</div>
     </div>`;
 }
@@ -1624,6 +1641,94 @@ async function updatePomoClock() {
       if (next.mode !== p.mode) { await refresh(); } else { setPomo(next); renderPomodoro(); }
     } finally { pomoTicking = false; }
   }
+}
+
+/* ---------- 专注等级 ---------- */
+/* 时长文字：45 → 45 分钟，450 → 7 小时 30 分钟，100 小时以上只显示小时 */
+function fmtDur(minutes) {
+  const m = Math.max(0, Math.round(minutes));
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  return h >= 100 || !rest ? `${h} 小时` : `${h} 小时 ${rest} 分钟`;
+}
+
+function levelOn() { return Boolean(S.state && S.state.level && S.state.settings.levels.enabled); }
+
+function levelMini() {
+  if (!levelOn()) return '';
+  const lv = S.state.level;
+  return `
+    <button class="level-mini" data-action="view" data-view="settings" title="累计专注 ${esc(fmtDur(lv.total_minutes))}，距 Lv${lv.level + 1} 还差 ${esc(fmtDur(lv.to_next))}">
+      <div class="row"><b class="num">Lv${lv.level}</b><span>${esc(lv.title)}</span><span class="pct num">${esc(fmtDur(lv.total_minutes))}</span></div>
+      <div class="bar"><span style="width:${lv.progress * 100}%"></span></div>
+      ${lv.show ? `<div class="level-show">${esc(lv.show.text)}</div>` : ''}
+    </button>`;
+}
+
+function levelLine() {
+  if (!levelOn()) return '';
+  const lv = S.state.level;
+  return `<div class="pomo-level num">Lv${lv.level} ${esc(lv.title)} · 距 Lv${lv.level + 1} 还差 ${esc(fmtDur(lv.to_next))}</div>`;
+}
+
+function levelPanel(row, toggle) {
+  const lv = S.state.level;
+  const cfg = S.state.settings.levels;
+  const titles = lv.titles.map((t) => `
+    <div class="title-row">
+      <span class="title-lv num">Lv${t.level}<small>${t.level ? `${esc(fmtDur(t.minutes))}起` : '起点'}</small></span>
+      <input class="input" maxlength="16" data-title-level="${t.level}" value="${t.custom ? esc(t.title) : ''}" placeholder="${esc(t.default)}">
+      ${t.custom ? `<button class="btn sm ghost" data-action="title-reset" data-level="${t.level}">恢复默认</button>` : '<span class="title-reset-gap"></span>'}
+    </div>`).join('');
+  const presets = lv.shows.filter((x) => !x.custom);
+  const presetList = presets.length
+    ? `<ul class="show-list">${presets.map((x) => `<li><span>${esc(x.title)}</span><span class="muted num">约 ${esc(fmtDur(x.minutes))}</span></li>`).join('')}</ul>`
+    : '<div class="set-desc">当前范围没有预设剧目。</div>';
+  const custom = cfg.custom_shows.length
+    ? `<ul class="show-list">${cfg.custom_shows.map((x, i) => `<li><span>${esc(x.title)}</span><span class="muted num">${x.episodes} 集 × ${x.minutes_per_episode} 分钟</span><button class="icon-btn sm" data-action="show-del" data-index="${i}" title="删除">${icon('trash', 'sm')}</button></li>`).join('')}</ul>`
+    : '<div class="set-desc">还没有添加。</div>';
+  return `
+    <div class="card panel">
+      <div class="panel-head"><h3>专注等级</h3></div>
+      <div class="level-summary">
+        <div class="level-big"><b class="num">Lv${lv.level}</b><span>${esc(lv.title)}</span></div>
+        <div class="bar"><span style="width:${lv.progress * 100}%"></span></div>
+        <div class="set-desc num">累计专注 ${esc(fmtDur(lv.total_minutes))}，距 Lv${lv.level + 1} 还差 ${esc(fmtDur(lv.to_next))}。</div>
+        ${lv.show ? `<div class="set-desc">${esc(lv.show.text)}。</div>` : ''}
+      </div>
+      ${row('显示等级', '侧栏和番茄钟整页显示等级，升级时发通知。只统计完成的专注，放弃的不算。', toggle('levels.enabled'))}
+      ${row('看剧换算', '把累计专注时长换算成看完了哪部剧。', toggle('levels.show_shows'))}
+      ${row('兴趣范围', lv.interest_note ? esc(lv.interest_note) : '', `<select class="input" data-setting="levels.interest">${lv.interests.map((x) => `<option value="${x.key}" ${cfg.interest === x.key ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`)}
+      <div class="set-block">
+        <div class="set-label">称号</div>
+        <div class="set-desc">留空使用默认称号。升到 Lv n 需要累计 30 × n × (n+1) 分钟。</div>
+        <div class="title-table">${titles}</div>
+      </div>
+      <div class="set-block">
+        <div class="set-label">预设剧目</div>
+        ${presetList}
+      </div>
+      <div class="set-block">
+        <div class="set-label">自定义的剧</div>
+        <div class="set-desc">和当前范围的预设剧目一起参与换算。兴趣范围选“只用自定义的剧”时只用这里的剧。</div>
+        ${custom}
+        <div class="show-add">
+          <input class="input" id="show-title" maxlength="30" placeholder="剧名">
+          <span class="field-row"><input class="input narrow num" id="show-episodes" type="number" min="1" max="2000" value="12"><span class="muted">集</span></span>
+          <span class="field-row"><input class="input narrow num" id="show-minutes" type="number" min="1" max="300" value="45"><span class="muted">分钟/集</span></span>
+          <button class="btn sm" data-action="show-add">${icon('plus', 'sm')}添加</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function saveLevels(patch) {
+  const data = JSON.parse(JSON.stringify(S.state.settings));
+  Object.assign(data.levels, patch);
+  const res = await call('save_settings', data);
+  if (!res.ok) toast(res.errors.join('\n'), true); else toast('已保存');
+  await refresh();
 }
 
 /* ---------- 设置 ---------- */
@@ -1659,6 +1764,7 @@ function settingsView() {
       ${row('长休息间隔', '每完成几次专注后休息一次长的。', number('pomodoro.long_every', 1, 12, '次'))}
       ${row('整页显示', '开始专注后整个窗口切换成计时画面。按 Esc 或“收起”回到原来的页面，计时继续。', toggle('pomodoro.full_page'))}
     </div>
+    ${levelPanel(row, toggle)}
     <div class="card panel">
       <div class="panel-head"><h3>后台运行</h3></div>
       ${row('点关闭按钮时', '最小化到托盘后提醒和番茄钟照常运行，退出后不再提醒。选“每次询问”时，下次点关闭按钮会再问一次。',

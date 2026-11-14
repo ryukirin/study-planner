@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from planner_core import paths, updater
 from planner_core.availability import ProfileError, parse_profile
+from planner_core.levels import level_up_message
 from planner_core.paths import resource_path
 from planner_core.plan_spec import format_date, parse_date, weekday_cn
 from planner_core.pomodoro import Pomodoro
@@ -224,7 +225,12 @@ class PlannerApi:
             reminders_cfg = self._ws.settings["reminders"]
             for event in self._pomodoro.tick():
                 if event.kind == "focus_done":
+                    before = self._ws.progress.focus_total()
                     self._ws.progress.add_focus(event.minutes, event.task)
+                    level_cfg = self._ws.settings["levels"]
+                    level_up = level_up_message(before, self._ws.progress.focus_total(), level_cfg)
+                    if level_up and level_cfg["enabled"]:
+                        self._notify(*level_up)
                     if reminders_cfg["pomodoro"]:
                         rest = self._ws.settings["pomodoro"]["long_break" if event.next_mode == "long_break" else "short_break"]
                         title = f"专注 {event.minutes} 分钟完成"

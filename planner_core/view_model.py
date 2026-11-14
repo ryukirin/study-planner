@@ -7,6 +7,7 @@ from typing import Any
 from .availability import STANDARD_TAGS, TAG_NAMES, Window, format_time
 from .scheduler import DayLayout
 from .jp_holidays import holidays_between
+from .levels import summary as level_summary
 from .notes_check import task_spans
 from .plan_spec import Session, format_date, parse_date, weekday_cn
 from .tasks import TASKS_PLAN_ID
@@ -268,6 +269,7 @@ def build_state(ws: Workspace, selected: date, today: date) -> dict[str, Any]:
         "profile": profile_payload(ws, today),
         "archived": ws.archived(),
         "settings": ws.settings,
+        "level": level_summary(ws.progress.focus_total(), ws.settings["levels"]),
     }
 
 

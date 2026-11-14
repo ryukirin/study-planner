@@ -1,9 +1,10 @@
-"""App 设置：提醒、番茄钟、后台运行。保存在 settings.json。"""
+"""App 设置：提醒、番茄钟、专注等级、后台运行。保存在 settings.json。"""
 from __future__ import annotations
 
 import copy
 from typing import Any
 
+from .levels import INTERESTS, validate_shows, validate_titles
 from .storage import load_json, write_json_atomic
 from .timeutil import parse_time
 
@@ -11,24 +12,27 @@ DEFAULT_SETTINGS: dict[str, dict[str, Any]] = {
     "reminders": {"timed": True, "timed_lead": 10, "task_start": True, "daily_summary": True,
                   "summary_time": "08:00", "pomodoro": True, "sound": True},
     "pomodoro": {"focus": 25, "short_break": 5, "long_break": 15, "long_every": 4, "full_page": True},
+    "levels": {"enabled": True, "show_shows": True, "interest": "cn_drama", "titles": {}, "custom_shows": []},
     "app": {"close_action": "ask", "autostart": True, "check_updates": True},
 }
 
 CLOSE_ACTIONS = ("ask", "tray", "quit")  # 点窗口的关闭按钮时：询问、缩到托盘、退出
 
-# 字段类型和取值范围：bool，(int, 最小, 最大)，"time"
+# 字段类型和取值范围：bool，(int, 最小, 最大)，"time"，("choice", 可选值)，("custom", 校验函数)
 RULES: dict[str, dict[str, Any]] = {
     "reminders": {"timed": bool, "timed_lead": (int, 0, 1440), "task_start": bool, "daily_summary": bool,
                   "summary_time": "time", "pomodoro": bool, "sound": bool},
     "pomodoro": {"focus": (int, 1, 180), "short_break": (int, 1, 60), "long_break": (int, 1, 120), "long_every": (int, 1, 12),
                  "full_page": bool},
+    "levels": {"enabled": bool, "show_shows": bool, "interest": ("choice", INTERESTS),
+               "titles": ("custom", validate_titles), "custom_shows": ("custom", validate_shows)},
     "app": {"close_action": ("choice", CLOSE_ACTIONS), "autostart": bool, "check_updates": bool},
 }
 
 LABELS = {
     "timed_lead": "定时任务提前提醒分钟数", "summary_time": "当日概览时间", "focus": "专注分钟数",
     "short_break": "短休息分钟数", "long_break": "长休息分钟数", "long_every": "几次专注后长休息",
-    "close_action": "点关闭按钮时",
+    "close_action": "点关闭按钮时", "interest": "兴趣范围",
 }
 
 
@@ -60,6 +64,11 @@ def validate_settings(data: Any) -> dict[str, dict[str, Any]]:
             if rule is bool:
                 if not isinstance(value, bool):
                     errors.append(f"{section}.{key}：必须是 true 或 false")
+                    continue
+            elif isinstance(rule, tuple) and rule[0] == "custom":
+                value, problems = rule[1](value)
+                if problems:
+                    errors.extend(problems)
                     continue
             elif isinstance(rule, tuple) and rule[0] == "choice":
                 if value not in rule[1]:

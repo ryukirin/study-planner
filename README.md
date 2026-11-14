@@ -1,6 +1,6 @@
 # 计划本（StudyPlanner）
 
-Windows 桌面计划 App。读取 Markdown 格式的计划文件，按每天的空闲时间段排出时间表，记录完成情况，在任务开始前发送 Windows 通知。带番茄钟和托盘菜单。
+Windows 桌面计划 App。读取 Markdown 格式的计划文件，按每天的空闲时间段排出时间表，记录完成情况，在任务开始前发送 Windows 通知。带番茄钟、专注等级和托盘菜单。
 
 计划文件由 Claude Code 或 Codex 里的 plan-builder skill 用对话生成，也可以手写。skill 内置在 App 里，在“设置”页一键安装。
 
@@ -83,7 +83,7 @@ Windows 桌面计划 App。读取 Markdown 格式的计划文件，按每天的�
 | `profile.json` | 空闲时间 |
 | `plans\*.md` | 计划文件 |
 | `tasks.json` | 临时任务 |
-| `settings.json` | 设置 |
+| `settings.json` | 设置，包括自定义称号和自定义的剧 |
 | `progress.json` | 完成记录和番茄钟记录 |
 | `day_order.json` | 日程页的手动调整，包括拖动后的排序、重排的时刻、改期的任务和提前完成时的前移记录 |
 

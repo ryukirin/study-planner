@@ -73,6 +73,11 @@ class ProgressStore:
     def focus_on(self, date_str: str) -> list[dict]:
         return [item for item in self.focus_log if item.get("date") == date_str]
 
+    def focus_total(self) -> int:
+        """所有完成的专注的累计分钟数，用来计算等级。"""
+        return sum(item["minutes"] for item in self.focus_log
+                   if isinstance(item.get("minutes"), int) and not isinstance(item.get("minutes"), bool) and item["minutes"] > 0)
+
     def focus_count(self, uid: str) -> int:
         return sum(1 for item in self.focus_log if item.get("uid") == uid)
 
