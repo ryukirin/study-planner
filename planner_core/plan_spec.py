@@ -23,8 +23,8 @@ MAX_REMIND_MINUTES = 1440
 TOP_KEYS = {"schema", "id", "name", "goal", "category", "color", "priority", "start_date", "deadline", "resources", "sequences", "phases", "events", "milestones"}
 PHASE_KEYS = {"name", "goal", "focus", "weeks", "week"}
 TASK_COMMON_KEYS = {"title", "minutes", "slot", "detail", "time", "location", "links", "remind"}
-TASK_KEYS = TASK_COMMON_KEYS | {"uses"}
-EVENT_KEYS = TASK_COMMON_KEYS | {"date", "offset_days"}
+TASK_KEYS = TASK_COMMON_KEYS | {"uses", "id", "after"}
+EVENT_KEYS = TASK_COMMON_KEYS | {"date", "offset_days", "id"}
 MILESTONE_KEYS = {"text", "note", "date", "offset_days", "tasks"}
 SEQUENCE_KEYS = {"items", "range", "label", "on_exhausted", "title"}
 RANGE_KEYS = {"from", "to", "step"}
@@ -61,6 +61,8 @@ class TaskTemplate:
     location: str = ""
     links: list[dict[str, str]] = field(default_factory=list)
     remind: int | bool | None = None
+    key: str = ""  # 计划文件里的 id，供其他任务的 after 引用
+    after: list[str] = field(default_factory=list)  # 前置任务的 id
 
 
 @dataclass
@@ -141,6 +143,8 @@ class Session:
     links: list[dict[str, str]] = field(default_factory=list)
     remind: int | bool | None = None
     moved_from: date | None = None  # 改期的任务原定的日期，day 是改期后的日期
+    prereqs: tuple[str, ...] = ()  # 前置任务的 id：同一序列的上一项，以及 after 指定的任务
+    blocked_by: str | None = None  # 因为这个前置任务没完成而自动推后时，记下它的 id
 
     @property
     def date_str(self) -> str:
@@ -413,9 +417,18 @@ def _parse_task(raw: Any, path: str, errors: list[str], sequences: dict[str, Seq
         for problem in template_problems(text, allowed, set(sequences), uses):
             errors.append(f"{path}.{key}：{problem}")
     extra = parse_task_extras(raw, path, errors)
+    key = raw.get("id", "") if "id" in allowed_keys else ""
+    if key != "" and (not isinstance(key, str) or not ID_RE.match(key)):
+        errors.append(f"{path}.id：只能用字母、数字、-、_、.，且以字母或数字开头")
+    after = raw.get("after", []) if "after" in allowed_keys else []
+    if isinstance(after, str):
+        after = [after]
+    if not isinstance(after, list) or not all(isinstance(item, str) and ID_RE.match(item) for item in after):
+        errors.append(f"{path}.after：必须是任务 id，或任务 id 的数组")
+        after = []
     if len(errors) > before:
         return None
-    return TaskTemplate(title=title, minutes=minutes, slot=slot, detail=detail, uses=uses, **extra)
+    return TaskTemplate(title=title, minutes=minutes, slot=slot, detail=detail, uses=uses, key=key, after=list(after), **extra)
 
 
 def parse_task_extras(raw: dict, path: str, errors: list[str]) -> dict[str, Any]:
@@ -613,6 +626,15 @@ def parse_plan(config: Any, notes: str = "", source_path: str = "") -> Plan:
     if not raw_phases and end is None and events:
         end = max(event.day for event in events)
 
+    # after 只能引用这个计划里写了 id 的任务或日程
+    week_tasks = [(f"phases[{index}].week.{key}[{position}]", task) for index, spec in enumerate(phase_specs)
+                  for key, tasks in spec[4].items() for position, task in enumerate(tasks)]
+    known = {task.key for _, task in week_tasks if task.key} | {event.task.key for event in events if event.task.key}
+    for path, task in week_tasks:
+        for name in task.after:
+            if name not in known:
+                errors.append(f"{path}.after：找不到 id 为 {name} 的任务。前置任务要写 \"id\": \"{name}\"")
+
     milestones: list[Milestone] = []
     raw_milestones = config.get("milestones", [])
     if not isinstance(raw_milestones, list):
@@ -661,6 +683,9 @@ def expand_plan(plan: Plan, color: str | None = None) -> Expansion:
         milestones.setdefault(milestone.day, []).append(milestone)
 
     by_date: dict[date, list[Session]] = {}
+    last_of_sequence: dict[str, str] = {}  # 每个序列最近展开的任务 id，下一项以它为前置
+    occurrences: dict[str, list[tuple[date, int, int, str]]] = {}  # 写了 id 的任务每次出现的 (日期, 种类, 当天顺序, 任务 id)
+    wanted: list[tuple[Session, list[str]]] = []  # 写了 after 的任务
     day = plan.start
     while day <= plan.end:
         phase_index = plan.phase_index_for(day)
@@ -679,6 +704,16 @@ def expand_plan(plan: Plan, color: str | None = None) -> Expansion:
                 detail=render_text(task.detail, values), minutes=task.minutes, slot=task.slot, phase=phase_name,
                 kind=kind, uses=uses, fixed_start=task.time, location=task.location, links=list(task.links), remind=task.remind,
             ))
+            session = sessions[-1]
+            if task.key:
+                occurrences.setdefault(task.key, []).append((day, _kind_rank(kind), session.order, session.uid))
+            if uses:
+                previous = last_of_sequence.get(uses["seq"])
+                if previous:
+                    session.prereqs = (previous,)
+                last_of_sequence[uses["seq"]] = session.uid
+            if task.after:
+                wanted.append((session, task.after))
 
         for template_key, template_index, task in slots:
             counter_key = (phase_index, template_key, template_index)
@@ -708,4 +743,17 @@ def expand_plan(plan: Plan, color: str | None = None) -> Expansion:
         if sessions:
             by_date[day] = sessions
         day += timedelta(days=1)
+    # after 指向那个 id 在这项任务之前最近的一次出现。同一天的日程排在任务之前
+    for session, names in wanted:
+        mine = (session.day, _kind_rank(session.kind), session.order)
+        found = list(session.prereqs)
+        for name in names:
+            earlier = [entry for entry in occurrences.get(name, []) if entry[:3] < mine]
+            if earlier and max(earlier)[3] not in found:
+                found.append(max(earlier)[3])
+        session.prereqs = tuple(found)
     return Expansion(plan=plan, by_date=by_date, usage=usage, milestones=milestones)
+
+
+def _kind_rank(kind: str) -> int:
+    return 0 if kind == "event" else 1

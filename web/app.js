@@ -69,6 +69,7 @@ const ICONS = {
   shrink: '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
   grow: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
 };
 const GRIP_SVG = '<svg viewBox="0 0 8 14" fill="currentColor"><circle cx="2" cy="2" r="1.2"/><circle cx="6" cy="2" r="1.2"/><circle cx="2" cy="7" r="1.2"/><circle cx="6" cy="7" r="1.2"/><circle cx="2" cy="12" r="1.2"/><circle cx="6" cy="12" r="1.2"/></svg>';
 const icon = (name, cls = '') => `<svg class="svg ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
@@ -268,6 +269,7 @@ function taskHtml(t, opts = {}) {
     opts.fixedMark && t.fixed ? `<span class="fixed-mark">${icon('clock', 'xs')}定时</span>` : '',
     `<span>${t.minutes} 分钟</span>`,
     t.moved_from ? `<span class="moved-mark" title="原定 ${monthDay(t.moved_from)} ${esc(t.moved_from_weekday)}">${icon('skip', 'xs')}原定 ${shortDate(t.moved_from)}</span>` : '',
+    !t.done && t.prereqs && t.prereqs.length ? `<span class="moved-mark" title="${esc(prereqText(t))}">${icon('lock', 'xs')}等前置</span>` : '',
     t.phase ? `<span>${esc(t.phase)}</span>` : '',
     t.focus_count ? `<span class="focus-count" title="已完成的专注次数">${icon('timer', 'xs')}${t.focus_count}</span>` : '',
   ].join('');
@@ -1049,8 +1051,9 @@ document.addEventListener('click', async (event) => {
     renderSidebar();
   } else if (action === 'toggle') {
     if (S.busy) return;
-    S.busy = true;
     const task = findByUid(el.dataset.uid);
+    if (el.dataset.done !== '1' && !await confirmPrereqs(task)) return;
+    S.busy = true;
     const res = await call('set_done', el.dataset.uid, el.dataset.done !== '1');
     S.busy = false;
     await refresh();
@@ -1361,6 +1364,15 @@ function shownTasks() {
   return [...day.groups.flatMap((g) => g.tasks), ...day.fixed, ...day.overflow, ...day.early, ...ranged, ...S.state.overdue];
 }
 function findByUid(uid) { return shownTasks().find((t) => t.uid === uid); }
+/* 还没完成的前置任务，例如：“Q1-4”（11/17 周二） */
+function prereqText(t) {
+  return `前置任务${t.prereqs.map((p) => `“${p.title}”（${monthDay(p.date)} ${p.weekday}）`).join('、')}还没完成`;
+}
+/* 前置任务没完成时，标记完成前先确认。没有前置或已确认时返回 true */
+async function confirmPrereqs(t) {
+  if (!t || t.done || !t.prereqs || !t.prereqs.length) return true;
+  return confirmDialog('前置任务还没完成', `${prereqText(t)}。仍然把“${t.title}”标为完成？`);
+}
 /* 勾选或取消完成后的提示。提前完成按周重复的任务时，同一项重复任务后面的各项依次前移 */
 function doneToast(t, res) {
   if (!res.ok) toast(res.error, true);
@@ -1432,7 +1444,12 @@ function taskDetailDialog(t) {
     t.fixed ? '定时' : '',
   ].filter(Boolean).join(' · ') + (t.unplaced ? `<div class="sub">没排进空闲时间${t.reason ? `：${esc(t.reason)}` : ''}</div>` : '')
     + (t.early ? '<div class="sub">已提前完成，不占当天的时间</div>' : ''));
-  if (t.moved_from) row('原定日期', `${monthDay(t.moved_from)} ${esc(t.moved_from_weekday)}`);
+  if (t.moved_from) row('原定日期', `${monthDay(t.moved_from)} ${esc(t.moved_from_weekday)}`
+    + (t.blocked_by ? `<div class="sub">前置任务“${esc(t.blocked_by.title)}”没完成，自动推后</div>` : ''));
+  if (!t.done && t.prereqs && t.prereqs.length) {
+    row('前置', t.prereqs.map((p) => `<div>${icon('lock', 'xs')} ${esc(p.title)} <span class="sub num">${monthDay(p.date)} ${esc(p.weekday)}</span></div>`).join('')
+      + '<div class="sub">前置任务完成前，这项排在它后面</div>');
+  }
   if (t.window) {
     const w = t.window;
     row('时间段', `${esc(w.label ? `${w.label} · ${tagName(w.tag)}` : tagName(w.tag))} <span class="sub num">${w.start}–${w.end}</span>`);
@@ -1458,7 +1475,7 @@ function taskDetailDialog(t) {
   const adjust = [
     !t.done && isToday ? `<button class="btn sm" value="finish-replan" title="记下现在的时间，今天还没做的任务从现在起重排">${icon('check', 'sm')}完成并重排</button>` : '',
     !t.done ? `<button class="btn sm" value="postpone" title="${isToday ? '今天还没做的任务从现在起重排' : '改到另一天，计划文件不变'}">${icon('skip', 'sm')}${t.date < st.today ? '排到今天' : (isToday ? '排到明天' : '排到后一天')}</button>` : '',
-    t.moved_from ? `<button class="btn sm" value="restore">${icon('undo', 'sm')}移回 ${shortDate(t.moved_from)}</button>` : '',
+    t.manual_move ? `<button class="btn sm" value="restore">${icon('undo', 'sm')}移回 ${shortDate(t.moved_from)}</button>` : '',
   ].filter(Boolean);
   if (adjust.length) row('调整', `<div class="chips">${adjust.join('')}</div>`);
 
@@ -1479,6 +1496,10 @@ function taskDetailDialog(t) {
       ${t.done ? '' : `<button class="btn" value="focus">${icon('timer', 'sm')}开始专注</button>`}
       <button class="btn${t.done ? '' : ' primary'}" value="toggle">${icon('check', 'sm')}${t.done ? '取消完成' : '标记完成'}</button>
     </div>`, async (f, action) => {
+    if (action === 'toggle' || action === 'finish-replan') {
+      // 确认框和详情用不同的弹窗，确认取消时详情保持打开
+      if (!await confirmPrereqs(t)) return false;
+    }
     if (action === 'toggle') {
       const res = await call('set_done', t.uid, !t.done);
       await refresh();

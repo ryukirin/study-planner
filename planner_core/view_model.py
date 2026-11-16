@@ -41,7 +41,22 @@ def session_payload(ws: Workspace, session: Session, start: int | None = None, e
         "focus_minutes": ws.progress.focus_minutes(session.uid),
         "is_task": session.plan_id == TASKS_PLAN_ID,
         "task_id": session.uid.split("|")[-1] if session.plan_id == TASKS_PLAN_ID else None,
+        "manual_move": session.uid in ws.day_order.moves,
+        "prereqs": prereqs_payload(ws, session),
+        "blocked_by": brief_payload(ws.session_by_uid(session.blocked_by)) if session.blocked_by else None,
     }
+
+
+def brief_payload(session: Session | None) -> dict[str, Any] | None:
+    if session is None:
+        return None
+    return {"uid": session.uid, "title": session.title, "date": session.date_str, "weekday": weekday_cn(session.day)}
+
+
+def prereqs_payload(ws: Workspace, session: Session) -> list[dict[str, Any]]:
+    """还没完成的前置任务。"""
+    return [brief_payload(item) for item in (ws.session_by_uid(uid) for uid in session.prereqs)
+            if item is not None and not ws.is_done(item.uid)]
 
 
 def banner_messages(ws: Workspace) -> list[dict[str, str]]:
@@ -79,8 +94,15 @@ def window_name(window: Window) -> str:
     return window.label or TAG_NAMES.get(window.tag, window.tag)
 
 
-def overflow_reason(layout: DayLayout, session: Session, at: int | None) -> str:
-    """任务没排进空闲时间的原因。at 是这一天的重排时刻，没有重排时为 None。"""
+def overflow_reason(layout: DayLayout, session: Session, at: int | None, done: set[str] | dict | None = None) -> str:
+    """任务没排进空闲时间的原因。at 是这一天的重排时刻，没有重排时为 None。done 是已完成的任务 id。"""
+    same_day = {item.session.uid: item.session for item in layout.placed} | {item.uid: item for item in layout.overflow}
+    waiting = [same_day[uid] for uid in session.prereqs if uid in same_day and uid not in (done or ())]
+    if waiting:
+        names = "、".join(f"“{item.title}”" for item in waiting)
+        if any(item in layout.overflow for item in waiting):
+            return f"前置任务{names}没排进这一天"
+        return f"排在前置任务{names}之后，剩下的时间不够 {session.minutes} 分钟"
     windows = [window for window in layout.windows if not session.slot or window.tag == session.slot]
     if not windows:
         tag = TAG_NAMES.get(session.slot or "", session.slot or "")
@@ -122,7 +144,7 @@ def day_payload(ws: Workspace, day: date, today: date | None = None) -> dict[str
         "groups": groups,
         "fixed": [session_payload(ws, item.session, item.start, item.end) for item in layout.fixed],
         "overflow": [{**session_payload(ws, session, unplaced=True),
-                      "reason": None if ws.is_done(session.uid) else overflow_reason(layout, session, at)}
+                      "reason": None if ws.is_done(session.uid) else overflow_reason(layout, session, at, ws.progress.records)}
                      for session in layout.overflow],
         "early": [session_payload(ws, session, early=True) for session in layout.early],
         "replan_at": format_time(at) if at is not None else None,

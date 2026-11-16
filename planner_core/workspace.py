@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import heapq
 import math
 import os
 import re
 import shutil
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from . import paths
 from .availability import Profile, load_profile, save_profile
@@ -14,13 +15,14 @@ from .day_order import DayOrderStore
 from .plan_spec import DEFAULT_COLORS, Expansion, Milestone, Phase, Plan, PlanError, Session, expand_plan, format_date, load_plan_file
 from .notes_check import phase_table_issues
 from .progress import ProgressStore
-from .scheduler import DayLayout, Feasibility, feasibility, layout_day, replan_day
+from .scheduler import DayLayout, Feasibility, feasibility, layout_day, replan_day, waiting_prereqs
 from .settings import load_settings, save_settings
 from .tasks import TASK_FIELDS, TASKS_PLAN_ID, TaskStore
 from .timeutil import format_time
 
 
 REPLAN_EXTRA_DAYS = 28  # 全部重排时，最后一个任务之后还可以往后排的天数
+PREREQ_EXTRA_DAYS = 28  # 前置任务没完成时，后续任务最多推到计划结束日期之后几天
 
 
 MILESTONE_MATCH = 4  # 任务标题和里程碑文字里相同的一段至少有几个字，才算相关
@@ -92,8 +94,10 @@ class WorkspaceError(ValueError):
 class Workspace:
     """一次性读取数据目录里的空闲时间、计划、临时任务、设置和完成记录，供 App 和 CLI 使用。"""
 
-    def __init__(self, home: str | None = None) -> None:
+    def __init__(self, home: str | None = None, today: Callable[[], date] | None = None) -> None:
         self.home = os.path.abspath(home) if home else paths.data_home()
+        # 前置任务没排进去时，从今天起把后续任务推到后一天。today 用于测试
+        self.today = today or date.today
         self.reload()
 
     @property
@@ -180,6 +184,9 @@ class Workspace:
         self._apply_moves()
         self._layout_cache: dict[date, DayLayout] = {}
         self._milestone_cache: dict[str, tuple[int, list[Milestone]]] = {}
+        if getattr(self, "_derive_prereqs", True):
+            self._apply_prereqs()
+            self._layout_cache = {}
 
     def _apply_moves(self) -> None:
         """把改期的任务从原定日期挪到新日期。任务 id 不变，完成记录跟着任务走。"""
@@ -190,15 +197,86 @@ class Workspace:
             if session is None or session.plan_id == TASKS_PLAN_ID:
                 continue
             target = date.fromisoformat(target_text)
-            if target == session.day:
+            if target != session.day:
+                self._relocate(session, target)
+
+    def _relocate(self, session: Session, target: date) -> None:
+        """把任务挪到 target 那天。moved_from 保留最初的原定日期。"""
+        by_date = self.expansions[session.plan_id].by_date
+        by_date[session.day].remove(session)
+        if not by_date[session.day]:
+            del by_date[session.day]
+        by_date.setdefault(target, []).append(session)
+        if session.moved_from is None:
+            session.moved_from = session.day
+        session.day = target
+
+    def _apply_prereqs(self) -> None:
+        """前置任务没完成时，把计划里没完成的任务往后推。推后的日期不写入 day_order.json，每次展开时重新计算。
+
+        1. 任务的日期不早于每个没完成的前置任务现在的日期。
+        2. 从今天起逐天检查：任务和没完成的前置任务在同一天、却没排进空闲时间（前置任务没排进去，
+           或排在前置任务之后放不下）时，推到后一天，它的后续任务跟着推。最晚推到计划结束日期之后 PREREQ_EXTRA_DAYS 天。
+        计划里的日程（events）和临时任务不推。"""
+        done = self.progress.records
+        followers: dict[str, list[Session]] = {}
+        for session in self._sessions.values():
+            for uid in session.prereqs:
+                followers.setdefault(uid, []).append(session)
+        if not followers:
+            return
+
+        def pushable(session: Session) -> bool:
+            return session.kind == "task" and session.plan_id != TASKS_PLAN_ID and session.uid not in done
+
+        def push(session: Session, target: date, cause: str) -> None:
+            """把任务推到 target，再让它没完成的后续任务不早于 target。"""
+            stack = [(session, target, cause)]
+            while stack:
+                item, day, uid = stack.pop()
+                if day <= item.day:
+                    continue
+                self._relocate(item, day)
+                item.blocked_by = uid
+                stack.extend((follower, day, item.uid) for follower in followers.get(item.uid, []) if pushable(follower))
+
+        # 1. 按原定的先后顺序处理，前置任务的日期先确定
+        def original(session: Session) -> tuple:
+            return (session.moved_from or session.day, 0 if session.kind == "event" else 1, session.order)
+
+        for session in sorted(self._sessions.values(), key=original):
+            if not pushable(session):
                 continue
-            by_date = self.expansions[session.plan_id].by_date
-            by_date[session.day].remove(session)
-            if not by_date[session.day]:
-                del by_date[session.day]
-            siblings = by_date.setdefault(target, [])
-            session.moved_from, session.day = session.day, target
-            siblings.append(session)
+            for uid in session.prereqs:
+                prereq = self._sessions.get(uid)
+                if prereq is not None and uid not in done and prereq.day > session.day:
+                    push(session, prereq.day, uid)
+
+        # 2. 从今天起，同一天里排不进去的后续任务推到后一天
+        today = self.today()
+
+        def waits_same_day(session: Session) -> list[str]:
+            same_day = {uid for uid in session.prereqs if uid in self._sessions and self._sessions[uid].day == session.day}
+            return waiting_prereqs(session, same_day, done)
+
+        days = sorted({session.day for session in self._sessions.values()
+                       if session.day >= today and pushable(session) and waits_same_day(session)})
+        heapq.heapify(days)
+        checked: set[date] = set()
+        while days:
+            day = heapq.heappop(days)
+            if day in checked:
+                continue
+            checked.add(day)
+            layout = self._arrange(day, self.sessions_on(day), self.manual_order(day), self.day_order.replan_at(format_date(day)))
+            for session in layout.overflow:
+                waiting = waits_same_day(session) if pushable(session) else []
+                plan = self.plan_by_id(session.plan_id)
+                if not waiting or plan is None or day >= plan.end + timedelta(days=PREREQ_EXTRA_DAYS):
+                    continue
+                push(session, day + timedelta(days=1), waiting[0])
+                heapq.heappush(days, day + timedelta(days=1))
+                checked.discard(day + timedelta(days=1))
 
     def session_by_uid(self, uid: str) -> Session | None:
         return self._sessions.get(uid)
@@ -340,7 +418,7 @@ class Workspace:
         early = [session for session in sessions if done_at.get(session.uid) and done_at[session.uid].date() < day]
         skipped = {session.uid for session in early}
         rest = [session for session in sessions if session.uid not in skipped]
-        layout = layout_day(day, rest, self.profile.windows_for(day), self.profile.buffer_minutes, manual)
+        layout = layout_day(day, rest, self.profile.windows_for(day), self.profile.buffer_minutes, manual, set(done_at))
         if at is not None:
             done = {uid: moment.hour * 60 + moment.minute if moment and moment.date() == day else None
                     for uid, moment in done_at.items() if uid not in skipped}
@@ -374,8 +452,9 @@ class Workspace:
         提前完成（完成的日期早于任务的日期）按周重复的任务时，同一项重复任务后面没做的各项依次前移一格：
         下一项移到这一天，再下一项移到下一项原来的日期。取消完成时按记录移回。"""
         self.progress.set_done(session, done, now)
-        self._layout_cache.pop(session.day, None)  # 重排过的日子，排程跟完成情况有关
-        self._milestone_cache = {}
+        # 排程跟完成情况有关：重排过的日子、前置任务完成以后的后续任务
+        self._expand_all()
+        session = self._sessions.get(session.uid, session)
         if done:
             return self._pull_followers(session, (now or datetime.now()).date())
         return self._undo_pull(session)
@@ -447,7 +526,7 @@ class Workspace:
         self.profile = profile
         self.profile_is_default = False
         self.profile_errors = []
-        self._layout_cache = {}
+        self._expand_all()
 
     def save_settings(self, data: dict[str, Any]) -> dict[str, Any]:
         self.settings = save_settings(self.settings_path, data)
@@ -512,13 +591,13 @@ class Workspace:
         if [(item.session.uid, item.start) for item in after.placed] == [(item.session.uid, item.start) for item in before.placed]:
             return False
         self.day_order.set(format_date(day), {format_time(start): uids for start, uids in order.items()})
-        self._layout_cache.pop(day, None)
+        self._expand_all()
         return True
 
     def set_replan(self, day: date, minute: int) -> None:
         """这一天还没做的任务从 minute 时刻起重排。"""
         self.day_order.set_replan(format_date(day), minute)
-        self._layout_cache.pop(day, None)
+        self._expand_all()
 
     def move_session_to_day(self, session: Session, target: date) -> Session:
         """把任务改到 target 那天，返回改期后的任务。计划里的任务记在 day_order.json，临时任务直接改日期。
@@ -546,6 +625,7 @@ class Workspace:
         - pull 为 True 时可以提前，最早到今天，且不早于所在阶段的开始日期。
         - pull 为 False 时只往后排，不早于任务现在的日期。
         - 同一个内容序列、同一个周模板位置的任务保持先后顺序。同一天里，同一计划的任务按原定日期排。
+        - 没完成的前置任务排在哪天，后续任务不早于那天。
         - 放得下的标准和当天排程一致：任务排进了时间段，且没有把别的任务挤到未排入。
         - 找不到放得下的日期时留在原定日期。
 
@@ -557,9 +637,11 @@ class Workspace:
         current = {session.uid: session.day for session in self._sessions.values() if movable(session)}
         old_moves = dict(self.day_order.moves)
         try:
-            # 先让参与的任务回到原定日期，拿到原来的当天顺序，再从这个状态开始安排
+            # 先让参与的任务回到原定日期，拿到原来的当天顺序，再从这个状态开始安排。
+            # 安排时按前置任务排好的日期推后续任务，不再另外推
             for uid in current:
                 self.day_order.moves.pop(uid, None)
+            self._derive_prereqs = False
             self._expand_all()
             queue = sorted((self._sessions[uid] for uid in current),
                            key=lambda session: (session.day, session.priority, session.plan_id, session.order))
@@ -580,6 +662,7 @@ class Workspace:
 
             moves: dict[str, str] = {}
             floors: dict[tuple, date] = {}
+            placed_on: dict[str, date] = {}
             unplaced = beyond = 0
             for session in queue:
                 plan = self.plan_by_id(session.plan_id)
@@ -588,6 +671,13 @@ class Workspace:
                 floor = max(today, phase.start if phase else plan.start) if pull else max(today, current[session.uid])
                 key = (session.plan_id, "seq", session.uses["seq"]) if session.uses else (session.plan_id, session.phase, session.uid.split("|")[-1])
                 day = max(floor, floors.get(key, floor))
+                for uid in session.prereqs:
+                    if uid in self.progress.records:
+                        continue
+                    if uid in placed_on:
+                        day = max(day, placed_on[uid])
+                    elif uid in self._sessions and uid not in current:
+                        day = max(day, self._sessions[uid].day)
                 while day <= horizon:
                     candidate = session if day == origin else replace(session, day=day, moved_from=origin)
                     layout = arrange(day, staying(day) + [candidate])
@@ -603,14 +693,17 @@ class Workspace:
                     continue
                 pool[day].append(candidate)
                 floors[key] = day
+                placed_on[session.uid] = day
                 if day != origin:
                     moves[session.uid] = format_date(day)
                 if day > plan.end:
                     beyond += 1
         except Exception:
             self.day_order.moves = old_moves
+            self._derive_prereqs = True
             self._expand_all()
             raise
+        self._derive_prereqs = True
         self.day_order.moves.update(moves)
         self.day_order.pulls = {}
         self.day_order.replan[format_date(today)] = format_time(minute)
@@ -631,7 +724,7 @@ class Workspace:
     def reset_day_order(self, day: date) -> bool:
         """删除这一天的手动排序和重排时刻，回到自动排程。改期的任务不受影响。"""
         changed = self.day_order.clear(format_date(day))
-        self._layout_cache.pop(day, None)
+        self._expand_all()
         return changed
 
     # ---------- 归档 ----------
@@ -707,7 +800,7 @@ class Workspace:
     # ---------- 统计与检查 ----------
 
     def feasibility(self, start: date, end: date) -> Feasibility:
-        return feasibility(self.sessions_on, self.profile, start, end, self.manual_order)
+        return feasibility(self.sessions_on, self.profile, start, end, self.manual_order, set(self.progress.records))
 
     def plan_warnings(self) -> list[str]:
         warnings = []

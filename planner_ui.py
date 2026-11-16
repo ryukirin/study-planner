@@ -223,7 +223,7 @@ class PlannerApi:
         self._lock = threading.RLock()
         self._today_override = today
         self._clock_override = clock
-        self._ws = Workspace(home)
+        self._ws = Workspace(home, today=self._today)
         self._fingerprint = self._ws.fingerprint()
         self._pomodoro = Pomodoro(lambda: self._ws.settings["pomodoro"])
         self._notifier: Callable[[str, str], None] | None = None
@@ -476,6 +476,9 @@ class PlannerApi:
         except OSError as exc:
             return {"ok": False, "error": f"保存失败：{exc}"}
         self._after_write()
+        # 前置任务没完成时，任务可能被推到更后的日期
+        moved = self._ws.session_by_uid(moved.uid) or moved
+        target = moved.day
         placement = next((item for item in self._ws.layout(target).placed if item.session.uid == moved.uid), None)
         return {
             "ok": True, "uid": moved.uid, "date": format_date(target), "weekday": weekday_cn(target),

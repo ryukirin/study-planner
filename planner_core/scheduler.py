@@ -52,24 +52,41 @@ def _first_free(start: int, end: int, minutes: int, busy: list[tuple[int, int]],
     return None
 
 
+def waiting_prereqs(session: Session, present: set[str], done: set[str] | frozenset[str]) -> list[str]:
+    """同一天里还没完成的前置任务。"""
+    return [uid for uid in session.prereqs if uid in present and uid not in done]
+
+
+def _earliest_after(prereqs: list[str], where: dict[str, Placement], buffer_minutes: int) -> int | None:
+    """前置任务都已放好时，返回最早的开始时刻（最晚结束的前置任务加上间隔）。还有没放好的，返回 None。"""
+    if any(uid not in where for uid in prereqs):
+        return None
+    return max((where[uid].end + buffer_minutes for uid in prereqs), default=0)
+
+
 def layout_day(day: date, sessions: list[Session], windows: list[Window], buffer_minutes: int,
-               manual: dict[int, list[str]] | None = None) -> DayLayout:
+               manual: dict[int, list[str]] | None = None, done: set[str] | frozenset[str] = frozenset()) -> DayLayout:
     """定时任务按 time 固定放置。其余任务按 计划优先级 → 计划 id → 原定日期 → 当天顺序，
     放入第一个 tag 匹配、放得下且不与定时任务重叠的时间段。改期的任务按原定日期排，
     从前面改过来的排在当天同一计划的任务之前，从后面提前的排在之后。
 
+    前置任务在同一天且没完成（不在 done 里）时，任务排在前置任务结束之后。前置任务没排进去时，任务也进入未排入。
+
     manual 是手动排序：{时间段开始的分钟数: [任务 id]}。列出的任务先按列表顺序放进指定的时间段，不检查 tag。
-    时间段不存在、任务不存在或放不下的条目被忽略，对应的任务按上面的规则自动安排。"""
+    时间段不存在、任务不存在、放不下或前置任务还没放好的条目被忽略，对应的任务按上面的规则自动安排。"""
     ordered_windows = sorted(windows, key=lambda item: item.start)
     cursors = [window.start for window in ordered_windows]
     placed: list[Placement] = []
+    where: dict[str, Placement] = {}
     overflow: list[Session] = []
     busy: list[tuple[int, int]] = []
+    present = {session.uid for session in sessions}
     ordered = sorted(sessions, key=lambda item: (item.priority, item.plan_id, item.moved_from or item.day, item.order))
     for session in ordered:
         if session.is_fixed:
             start = session.fixed_start
             placed.append(Placement(session, start, start + session.minutes, None))
+            where[session.uid] = placed[-1]
             busy.append((start, start + session.minutes))
     movable = {session.uid: session for session in ordered if not session.is_fixed}
     pinned: set[str] = set()
@@ -78,21 +95,30 @@ def layout_day(day: date, sessions: list[Session], windows: list[Window], buffer
             session = movable.get(uid)
             if session is None or uid in pinned:
                 continue
-            start = _first_free(cursors[index], window.end, session.minutes, busy, buffer_minutes)
+            earliest = _earliest_after(waiting_prereqs(session, present, done), where, buffer_minutes)
+            if earliest is None:
+                continue
+            start = _first_free(max(cursors[index], earliest), window.end, session.minutes, busy, buffer_minutes)
             if start is None:
                 continue
             placed.append(Placement(session, start, start + session.minutes, window))
+            where[uid] = placed[-1]
             cursors[index] = start + session.minutes + buffer_minutes
             pinned.add(uid)
     for session in ordered:
         if session.is_fixed or session.uid in pinned:
             continue
+        earliest = _earliest_after(waiting_prereqs(session, present, done), where, buffer_minutes)
+        if earliest is None:
+            overflow.append(session)
+            continue
         for index, window in enumerate(ordered_windows):
             if session.slot and session.slot != window.tag:
                 continue
-            start = _first_free(cursors[index], window.end, session.minutes, busy, buffer_minutes)
+            start = _first_free(max(cursors[index], earliest), window.end, session.minutes, busy, buffer_minutes)
             if start is not None:
                 placed.append(Placement(session, start, start + session.minutes, window))
+                where[session.uid] = placed[-1]
                 cursors[index] = start + session.minutes + buffer_minutes
                 break
         else:
@@ -147,7 +173,8 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
       能放进原来的时间段或 tag 匹配的时间段，取最早放得下的一个，都放不下进入未排入。
     - 原来未排入的任务排在最后重新尝试。已经做完的按完成时刻显示，不再算作未排入。
     - manual 是手动排序，格式和 layout_day 的一样。列出的没完成的任务排在前面，先试指定的时间段，不检查 tag。
-      已完成的任务腾出了时间，所以 layout_day 里放不下的手动条目在这里可能放得下。"""
+      已完成的任务腾出了时间，所以 layout_day 里放不下的手动条目在这里可能放得下。
+    - 同一天还没完成的前置任务放好以后，才放它的后续任务，后续任务排在前置任务结束之后。前置任务未排入时，后续任务也未排入。"""
     frozen: list[Placement] = []
     waiting: list[tuple[Session, Window | None]] = []
     finished: list[tuple[Session, int | None, Window | None, Placement | None]] = []
@@ -187,20 +214,43 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
     busy = [(item.start, item.end) for item in frozen]
     cursors = [max(window.start, at) for window in base.windows]
     placed = list(frozen)
-    for session, home, home_first in queue:
-        candidates = list(enumerate(base.windows))
-        if home_first:
-            candidates.sort(key=lambda pair: pair[1] is not home)
-        for index, window in candidates:
-            if window is not home and session.slot and session.slot != window.tag:
+    where = {item.session.uid: item for item in frozen}
+    present = {item.session.uid for item in base.placed} | {session.uid for session in base.overflow}
+    failed: set[str] = set()
+    # 前置任务还没放好的任务先跳过，等这一轮放完再试
+    pending = queue
+    while pending:
+        deferred = []
+        for entry in pending:
+            session, home, home_first = entry
+            prereqs = waiting_prereqs(session, present, done)
+            if any(uid in failed for uid in prereqs):
+                overflow.append(session)
+                failed.add(session.uid)
                 continue
-            start = _first_free(cursors[index], window.end, session.minutes, busy, buffer_minutes)
-            if start is not None:
-                placed.append(Placement(session, start, start + session.minutes, window))
-                cursors[index] = start + session.minutes + buffer_minutes
-                break
-        else:
-            overflow.append(session)
+            earliest = _earliest_after(prereqs, where, buffer_minutes)
+            if earliest is None:
+                deferred.append(entry)
+                continue
+            candidates = list(enumerate(base.windows))
+            if home_first:
+                candidates.sort(key=lambda pair: pair[1] is not home)
+            for index, window in candidates:
+                if window is not home and session.slot and session.slot != window.tag:
+                    continue
+                start = _first_free(max(cursors[index], earliest), window.end, session.minutes, busy, buffer_minutes)
+                if start is not None:
+                    placed.append(Placement(session, start, start + session.minutes, window))
+                    where[session.uid] = placed[-1]
+                    cursors[index] = start + session.minutes + buffer_minutes
+                    break
+            else:
+                overflow.append(session)
+                failed.add(session.uid)
+        if len(deferred) == len(pending):
+            overflow.extend(session for session, _, _ in deferred)
+            break
+        pending = deferred
     placed.sort(key=lambda item: (item.start, item.session.priority))
     return DayLayout(day=base.day, windows=base.windows, placed=placed, overflow=overflow, early=base.early)
 
@@ -230,7 +280,8 @@ class Feasibility:
 
 
 def feasibility(sessions_on: Callable[[date], list[Session]], profile: Profile, start: date, end: date,
-                manual_on: Callable[[date], dict[int, list[str]]] | None = None) -> Feasibility:
+                manual_on: Callable[[date], dict[int, list[str]]] | None = None,
+                done: set[str] | frozenset[str] = frozenset()) -> Feasibility:
     report = Feasibility(start=start, end=end)
     week: WeekLoad | None = None
     day = start
@@ -241,7 +292,7 @@ def feasibility(sessions_on: Callable[[date], list[Session]], profile: Profile, 
             report.weeks.append(week)
         windows = profile.windows_for(day)
         sessions = sessions_on(day)
-        layout = layout_day(day, sessions, windows, profile.buffer_minutes, manual_on(day) if manual_on else None)
+        layout = layout_day(day, sessions, windows, profile.buffer_minutes, manual_on(day) if manual_on else None, done)
         week.available += layout.available_minutes
         week.required += sum(session.minutes for session in sessions)
         if layout.overflow:
