@@ -15,7 +15,7 @@ from .day_order import DayOrderStore
 from .plan_spec import DEFAULT_COLORS, Expansion, Milestone, Phase, Plan, PlanError, Session, expand_plan, format_date, load_plan_file
 from .notes_check import phase_table_issues
 from .progress import ProgressStore
-from .scheduler import DayLayout, Feasibility, feasibility, layout_day, replan_day, waiting_prereqs
+from .scheduler import DayLayout, Feasibility, feasibility, layout_day, plan_track, replan_day, waiting_prereqs
 from .settings import load_settings, save_settings
 from .tasks import TASK_FIELDS, TASKS_PLAN_ID, TaskStore
 from .timeutil import format_time
@@ -624,7 +624,8 @@ class Workspace:
         任务按原定日期、计划优先级、当天顺序排队，每个任务放到最早放得下的一天：
         - pull 为 True 时可以提前，最早到今天，且不早于所在阶段的开始日期。
         - pull 为 False 时只往后排，不早于任务现在的日期。
-        - 同一个内容序列、同一个周模板位置的任务保持先后顺序。同一天里，同一计划的任务按原定日期排。
+        - 同一计划、同一类型的任务保持原定的先后顺序：每个任务不早于排在它前面的那项排到的日期。
+          同一天里的先后由 layout_day 保证。
         - 没完成的前置任务排在哪天，后续任务不早于那天。
         - 放得下的标准和当天排程一致：任务排进了时间段，且没有把别的任务挤到未排入。
         - 找不到放得下的日期时留在原定日期。
@@ -661,7 +662,9 @@ class Workspace:
                 return pool[day]
 
             moves: dict[str, str] = {}
-            floors: dict[tuple, date] = {}
+            # 每个计划、每种类型已经排到的最晚日期。队列里同一计划的任务按原定日期和当天顺序排，
+            # 后面的任务不早于这个日期，短任务不会单独提前到前面的任务之前
+            track_floor: dict[tuple[str, str], date] = {}
             placed_on: dict[str, date] = {}
             unplaced = beyond = 0
             for session in queue:
@@ -669,8 +672,8 @@ class Workspace:
                 origin = session.day
                 phase = plan.phase_for(origin)
                 floor = max(today, phase.start if phase else plan.start) if pull else max(today, current[session.uid])
-                key = (session.plan_id, "seq", session.uses["seq"]) if session.uses else (session.plan_id, session.phase, session.uid.split("|")[-1])
-                day = max(floor, floors.get(key, floor))
+                track = plan_track(session)
+                day = max(floor, track_floor.get(track, floor))
                 for uid in session.prereqs:
                     if uid in self.progress.records:
                         continue
@@ -690,9 +693,10 @@ class Workspace:
                     if origin >= today:
                         staying(origin).append(session)
                         over[origin].add(session.uid)
+                        track_floor[track] = max(track_floor.get(track, origin), origin)
                     continue
                 pool[day].append(candidate)
-                floors[key] = day
+                track_floor[track] = day
                 placed_on[session.uid] = day
                 if day != origin:
                     moves[session.uid] = format_date(day)

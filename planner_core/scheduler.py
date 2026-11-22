@@ -6,6 +6,7 @@ from typing import Callable
 
 from .availability import Profile, Window
 from .plan_spec import Session
+from .tasks import TASKS_PLAN_ID
 
 
 @dataclass
@@ -57,6 +58,14 @@ def waiting_prereqs(session: Session, present: set[str], done: set[str] | frozen
     return [uid for uid in session.prereqs if uid in present and uid not in done]
 
 
+def plan_track(session: Session) -> tuple[str, str] | None:
+    """同一计划、同一类型（slot）的任务按计划里的先后顺序排，返回 (计划 id, 类型)。
+    类型不同的任务落在不同的时间段，不互相限制。临时任务、日程和定时任务不参与，返回 None。"""
+    if session.kind != "task" or session.is_fixed or session.plan_id == TASKS_PLAN_ID:
+        return None
+    return (session.plan_id, session.slot)
+
+
 def _earliest_after(prereqs: list[str], where: dict[str, Placement], buffer_minutes: int) -> int | None:
     """前置任务都已放好时，返回最早的开始时刻（最晚结束的前置任务加上间隔）。还有没放好的，返回 None。"""
     if any(uid not in where for uid in prereqs):
@@ -69,6 +78,9 @@ def layout_day(day: date, sessions: list[Session], windows: list[Window], buffer
     """定时任务按 time 固定放置。其余任务按 计划优先级 → 计划 id → 原定日期 → 当天顺序，
     放入第一个 tag 匹配、放得下且不与定时任务重叠的时间段。改期的任务按原定日期排，
     从前面改过来的排在当天同一计划的任务之前，从后面提前的排在之后。
+
+    同一计划、同一类型的任务（plan_track）不早于前面已经自动放好的那项结束，后面较短的任务不会单独放进更早的时间段。
+    前面的任务没排进去或已完成时不限制。
 
     前置任务在同一天且没完成（不在 done 里）时，任务排在前置任务结束之后。前置任务没排进去时，任务也进入未排入。
 
@@ -105,6 +117,7 @@ def layout_day(day: date, sessions: list[Session], windows: list[Window], buffer
             where[uid] = placed[-1]
             cursors[index] = start + session.minutes + buffer_minutes
             pinned.add(uid)
+    track_end: dict[tuple[str, str], int] = {}
     for session in ordered:
         if session.is_fixed or session.uid in pinned:
             continue
@@ -112,6 +125,8 @@ def layout_day(day: date, sessions: list[Session], windows: list[Window], buffer
         if earliest is None:
             overflow.append(session)
             continue
+        track = None if session.uid in done else plan_track(session)
+        earliest = max(earliest, track_end.get(track, 0))
         for index, window in enumerate(ordered_windows):
             if session.slot and session.slot != window.tag:
                 continue
@@ -120,6 +135,8 @@ def layout_day(day: date, sessions: list[Session], windows: list[Window], buffer
                 placed.append(Placement(session, start, start + session.minutes, window))
                 where[session.uid] = placed[-1]
                 cursors[index] = start + session.minutes + buffer_minutes
+                if track:
+                    track_end[track] = start + session.minutes + buffer_minutes
                 break
         else:
             overflow.append(session)
@@ -174,7 +191,8 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
     - 原来未排入的任务排在最后重新尝试。已经做完的按完成时刻显示，不再算作未排入。
     - manual 是手动排序，格式和 layout_day 的一样。列出的没完成的任务排在前面，先试指定的时间段，不检查 tag。
       已完成的任务腾出了时间，所以 layout_day 里放不下的手动条目在这里可能放得下。
-    - 同一天还没完成的前置任务放好以后，才放它的后续任务，后续任务排在前置任务结束之后。前置任务未排入时，后续任务也未排入。"""
+    - 同一天还没完成的前置任务放好以后，才放它的后续任务，后续任务排在前置任务结束之后。前置任务未排入时，后续任务也未排入。
+    - 手动排序以外的任务，同一计划、同一类型的不早于前面已经放好的那项结束，和 layout_day 一样。"""
     frozen: list[Placement] = []
     waiting: list[tuple[Session, Window | None]] = []
     finished: list[tuple[Session, int | None, Window | None, Placement | None]] = []
@@ -217,6 +235,7 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
     where = {item.session.uid: item for item in frozen}
     present = {item.session.uid for item in base.placed} | {session.uid for session in base.overflow}
     failed: set[str] = set()
+    track_end: dict[tuple[str, str], int] = {}
     # 前置任务还没放好的任务先跳过，等这一轮放完再试
     pending = queue
     while pending:
@@ -232,6 +251,8 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
             if earliest is None:
                 deferred.append(entry)
                 continue
+            track = None if home_first else plan_track(session)
+            earliest = max(earliest, track_end.get(track, 0))
             candidates = list(enumerate(base.windows))
             if home_first:
                 candidates.sort(key=lambda pair: pair[1] is not home)
@@ -243,6 +264,8 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
                     placed.append(Placement(session, start, start + session.minutes, window))
                     where[session.uid] = placed[-1]
                     cursors[index] = start + session.minutes + buffer_minutes
+                    if track:
+                        track_end[track] = start + session.minutes + buffer_minutes
                     break
             else:
                 overflow.append(session)
