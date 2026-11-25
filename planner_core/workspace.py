@@ -189,12 +189,13 @@ class Workspace:
             self._layout_cache = {}
 
     def _apply_moves(self) -> None:
-        """把改期的任务从原定日期挪到新日期。任务 id 不变，完成记录跟着任务走。"""
+        """把改期的任务从原定日期挪到新日期。任务 id 不变，完成记录跟着任务走。
+        计划重排后同一位置换成了别的任务时（快照对不上），改期不起作用。"""
         self._sessions: dict[str, Session] = {
             session.uid: session for expansion in self.iter_expansions() for session in expansion.all_sessions()}
         for uid, target_text in self.day_order.moves.items():
             session = self._sessions.get(uid)
-            if session is None or session.plan_id == TASKS_PLAN_ID:
+            if session is None or session.plan_id == TASKS_PLAN_ID or not self._recorded_for(session):
                 continue
             target = date.fromisoformat(target_text)
             if target != session.day:
@@ -280,6 +281,24 @@ class Workspace:
 
     def session_by_uid(self, uid: str) -> Session | None:
         return self._sessions.get(uid)
+
+    @staticmethod
+    def _snapshot(session: Session) -> dict | None:
+        """写进 day_order.json 的任务快照。临时任务的 id 不会换给别的任务，不记快照。"""
+        if session.plan_id == TASKS_PLAN_ID:
+            return None
+        return {"title": session.title, "minutes": session.minutes, "slot": session.slot}
+
+    def _recorded_for(self, session: Session) -> bool:
+        """day_order.json 里这个 id 的记录是不是为现在这个任务写的。"""
+        return self.day_order.matches(session.uid, self._snapshot(session))
+
+    def _remember(self, session: Session) -> None:
+        self.day_order.remember(session.uid, self._snapshot(session))
+
+    def has_manual_move(self, session: Session) -> bool:
+        """任务有起作用的改期记录。"""
+        return session.uid in self.day_order.moves and self._recorded_for(session)
 
     def iter_expansions(self) -> Iterator[Expansion]:
         if self.task_expansion:
@@ -434,8 +453,13 @@ class Workspace:
             return None
 
     def manual_order(self, day: date) -> dict[int, list[str]]:
-        """这一天的手动排序：{时间段开始的分钟数: [任务 id]}，没有时为空。"""
-        return self.day_order.get(format_date(day))
+        """这一天的手动排序：{时间段开始的分钟数: [任务 id]}，没有时为空。快照对不上的任务不算在内。"""
+        order = {}
+        for start, uids in self.day_order.get(format_date(day)).items():
+            kept = [uid for uid in uids if uid not in self._sessions or self._recorded_for(self._sessions[uid])]
+            if kept:
+                order[start] = kept
+        return order
 
     def date_range(self) -> tuple[date, date] | None:
         expansions = list(self.iter_expansions())
@@ -480,6 +504,7 @@ class Workspace:
             return 0
         targets = [session.day] + [item.day for item in followers[:-1]]
         record: dict[str, list[str]] = {}
+        self._remember(session)
         for item, target in zip(followers, targets):
             record[item.uid] = [format_date(item.day), format_date(target)]
             self._set_move(item, target)
@@ -492,11 +517,14 @@ class Workspace:
         record = self.day_order.pulls.pop(session.uid, None)
         if record is None:
             return 0
+        if not self._recorded_for(session):
+            # 计划重排后这个位置换成了别的任务，前移记录不再对应现在的任务
+            record = {}
         count = 0
         for uid, (previous, moved_to) in record.items():
             item = self._sessions.get(uid)
-            # 前移之后又被改过日期或已经完成的任务不动
-            if item is None or format_date(item.day) != moved_to or self.progress.is_done(uid):
+            # 前移之后又被改过日期、已经完成、或计划重排后换成了别的任务的不动
+            if item is None or format_date(item.day) != moved_to or self.progress.is_done(uid) or not self._recorded_for(item):
                 continue
             self._set_move(item, date.fromisoformat(previous))
             count += 1
@@ -506,6 +534,7 @@ class Workspace:
 
     def _set_move(self, session: Session, target: date) -> None:
         """在 day_order 里记下任务的新日期，不保存、不重新展开。target 等于原定日期时取消改期。"""
+        self._remember(session)
         if target == (session.moved_from or session.day):
             self.day_order.moves.pop(session.uid, None)
         else:
@@ -590,6 +619,9 @@ class Workspace:
                 raise WorkspaceError(f"{name}放不下，“{item.session.title}”会被挤出去")
         if [(item.session.uid, item.start) for item in after.placed] == [(item.session.uid, item.start) for item in before.placed]:
             return False
+        for uids in order.values():
+            for uid in uids:
+                self._remember(self._sessions[uid])
         self.day_order.set(format_date(day), {format_time(start): uids for start, uids in order.items()})
         self._expand_all()
         return True
@@ -613,6 +645,7 @@ class Workspace:
             self.update_task(task_id, data)
             return self._sessions[f"{TASKS_PLAN_ID}|{format_date(target)}|{task_id}"]
         origin = session.moved_from or session.day
+        self._remember(session)
         self.day_order.set_move(session.uid, None if target == origin else format_date(target))
         self._expand_all()
         return self._sessions[session.uid]
@@ -708,8 +741,10 @@ class Workspace:
             self._expand_all()
             raise
         self._derive_prereqs = True
-        self.day_order.moves.update(moves)
         self.day_order.pulls = {}
+        for uid, day_text in moves.items():
+            self._remember(self._sessions[uid])
+            self.day_order.moves[uid] = day_text
         self.day_order.replan[format_date(today)] = format_time(minute)
         self.day_order.save()
         self._expand_all()

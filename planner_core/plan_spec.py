@@ -631,9 +631,9 @@ def parse_plan(config: Any, notes: str = "", source_path: str = "") -> Plan:
                   for key, tasks in spec[4].items() for position, task in enumerate(tasks)]
     known = {task.key for _, task in week_tasks if task.key} | {event.task.key for event in events if event.task.key}
     for path, task in week_tasks:
-        for name in task.after:
-            if name not in known:
-                errors.append(f"{path}.after：找不到 id 为 {name} 的任务。前置任务要写 \"id\": \"{name}\"")
+        for key in task.after:
+            if key not in known:
+                errors.append(f"{path}.after：找不到 id 为 {key} 的任务。前置任务要写 \"id\": \"{key}\"")
 
     milestones: list[Milestone] = []
     raw_milestones = config.get("milestones", [])

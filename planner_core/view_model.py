@@ -41,7 +41,7 @@ def session_payload(ws: Workspace, session: Session, start: int | None = None, e
         "focus_minutes": ws.progress.focus_minutes(session.uid),
         "is_task": session.plan_id == TASKS_PLAN_ID,
         "task_id": session.uid.split("|")[-1] if session.plan_id == TASKS_PLAN_ID else None,
-        "manual_move": session.uid in ws.day_order.moves,
+        "manual_move": ws.has_manual_move(session),
         "prereqs": prereqs_payload(ws, session),
         "blocked_by": brief_payload(ws.session_by_uid(session.blocked_by)) if session.blocked_by else None,
     }
@@ -140,7 +140,7 @@ def day_payload(ws: Workspace, day: date, today: date | None = None) -> dict[str
         "exception_note": exception_note,
         "holiday": ws.profile.holiday_name(day),
         "holiday_windows": ws.profile.uses_holiday_windows(day),
-        "manual_order": ws.day_order.has(format_date(day)),
+        "manual_order": bool(ws.manual_order(day)) or at is not None,
         "groups": groups,
         "fixed": [session_payload(ws, item.session, item.start, item.end) for item in layout.fixed],
         "overflow": [{**session_payload(ws, session, unplaced=True),
