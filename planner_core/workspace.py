@@ -861,6 +861,19 @@ class Workspace:
             warnings.extend(f"[{plan.id}] {issue}" for issue in phase_table_issues(plan, expansion))
         return warnings
 
+    def record_conflicts(self, today: date) -> list[tuple[Session, dict]]:
+        """原定日期不早于 today 的计划任务里，完成记录的标题和现在的任务标题不同的：[(任务, 完成记录)]。
+
+        完成记录按任务 id 识别。计划重排后同一日期、同一模板位置换成了别的任务时，新任务会算作已完成。
+        today 之前的记录不列出，重排计划时 start_date 改到重排起始日，之前的任务 id 不再出现。只改了文字的任务也会列出。"""
+        conflicts = []
+        for plan in self.plans:
+            for session in self.expansions[plan.id].all_sessions():
+                record = self.progress.records.get(session.uid)
+                if record is not None and (session.moved_from or session.day) >= today and record.get("title") != session.title:
+                    conflicts.append((session, record))
+        return sorted(conflicts, key=lambda item: (item[0].moved_from or item[0].day, item[0].priority, item[0].plan_id, item[0].order))
+
     def plan_status(self, plan: Plan, today: date) -> PlanStatus:
         expansion = self.expansions[plan.id]
         sessions = expansion.all_sessions()

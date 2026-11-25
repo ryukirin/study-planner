@@ -150,6 +150,16 @@ def cmd_check(ws: Workspace, args) -> int:
         print("警告：")
         for warning in warnings:
             print(f"  - {warning}")
+    conflicts = ws.record_conflicts(args.today)
+    if conflicts:
+        print(f"完成记录对不上 {len(conflicts)} 项，下面的任务所在位置有标题不同的完成记录，会算作已完成：")
+        for session, record in conflicts[:20]:
+            origin = session.moved_from or session.day
+            done_at = str(record.get("done_at") or "")[:10]
+            print(f"  {format_date(origin)} {weekday_cn(origin)}  [{session.plan_name}] 现在是“{session.title}”，"
+                  f"完成记录是“{record.get('title', '')}”" + (f"（{done_at} 完成）" if done_at else ""))
+        if len(conflicts) > 20:
+            print(f"  …… 其余 {len(conflicts) - 20} 项省略")
 
     span = ws.date_range()
     if span:
