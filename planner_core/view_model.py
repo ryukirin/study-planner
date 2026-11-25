@@ -95,7 +95,8 @@ def window_name(window: Window) -> str:
 
 
 def overflow_reason(layout: DayLayout, session: Session, at: int | None, done: set[str] | dict | None = None) -> str:
-    """任务没排进空闲时间的原因。at 是这一天的重排时刻，没有重排时为 None。done 是已完成的任务 id。"""
+    """任务没排进空闲时间的原因。at 是这一天的重排时刻，没有重排时为 None。done 是已完成的任务 id。
+    重排以后又勾选过任务时，按 layout.resume_at（最后一次勾选加上间隔）计算剩下的时间。"""
     same_day = {item.session.uid: item.session for item in layout.placed} | {item.uid: item for item in layout.overflow}
     waiting = [same_day[uid] for uid in session.prereqs if uid in same_day and uid not in (done or ())]
     if waiting:
@@ -107,15 +108,18 @@ def overflow_reason(layout: DayLayout, session: Session, at: int | None, done: s
     if not windows:
         tag = TAG_NAMES.get(session.slot or "", session.slot or "")
         return f"这一天没有“{tag}”类型的空闲时间段" if session.slot else "这一天没有空闲时间段"
-    if at is not None and all(window.end - max(window.start, at) < session.minutes for window in windows):
+    start = layout.resume_at if at is not None and layout.resume_at is not None else at
+    if start is not None and all(window.end - max(window.start, start) < session.minutes for window in windows):
         names = "、".join(f"{window_name(window)} {format_time(window.start)}–{format_time(window.end)}" for window in windows)
-        return f"{format_time(at)} 起重排时，{names} 剩下的时间不够 {session.minutes} 分钟"
+        when = f"{format_time(at)} 起重排时" if start == at else f"最后一次勾选之后从 {format_time(start)} 起排"
+        return f"{when}，{names} 剩下的时间不够 {session.minutes} 分钟"
     return f"可以放的时间段里剩下的时间不够 {session.minutes} 分钟"
 
 
 def day_payload(ws: Workspace, day: date, today: date | None = None) -> dict[str, Any]:
     layout = ws.layout(day)
     at = ws.day_order.replan_at(format_date(day))
+    resume = layout.resume_at if at is not None and layout.resume_at is not None else at
     groups = []
     for window in layout.windows:
         items = [item for item in layout.placed if item.window is window]
@@ -123,8 +127,8 @@ def day_payload(ws: Workspace, day: date, today: date | None = None) -> dict[str
             "window": window_payload(window),
             "tasks": [session_payload(ws, item.session, item.start, item.end, window) for item in items],
             "free": window.end - (items[-1].end if items else window.start),
-            # 重排时已经过去的时间段，不再放没做的任务
-            "passed": at is not None and window.end <= at,
+            # 重排时刻或最后一次勾选之前已经结束的时间段，不再放没做的任务
+            "passed": resume is not None and window.end <= resume,
         })
     sessions = ws.sessions_on(day)
     uids = {session.uid for session in sessions}
@@ -148,6 +152,7 @@ def day_payload(ws: Workspace, day: date, today: date | None = None) -> dict[str
                      for session in layout.overflow],
         "early": [session_payload(ws, session, early=True) for session in layout.early],
         "replan_at": format_time(at) if at is not None else None,
+        "resume_at": format_time(resume) if resume is not None else None,
         "milestones": milestones_payload(ws, day, today),
         "history": history,
         "total": len(sessions),

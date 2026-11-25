@@ -24,6 +24,7 @@ class DayLayout:
     placed: list[Placement]
     overflow: list[Session]
     early: list[Session] = field(default_factory=list)  # 在这一天之前就完成的任务，不占这一天的时间
+    resume_at: int | None = None  # 重排过的一天里，没做的任务最早从这个时刻起放：重排时刻，或之后最后一次勾选加上间隔。没有重排时为 None
 
     @property
     def available_minutes(self) -> int:
@@ -187,6 +188,8 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
     - 没完成的定时任务不动。
     - 已完成的任务（包括定时任务）按实际用掉的时间显示，规则见 _finished_placements。
     - 没完成的任务全部重排：按 base 里的先后顺序，从 at 起放进时间段，避开定时任务和已完成任务占用的时间。
+      当天在 at 之后又勾选过任务时，从最后一次勾选的时刻加上间隔起放，勾选之前的时间已经过去。
+      “完成并重排”的勾选时刻就是 at，不另加间隔。
       能放进原来的时间段或 tag 匹配的时间段，取最早放得下的一个，都放不下进入未排入。
     - 原来未排入的任务排在最后重新尝试。已经做完的按完成时刻显示，不再算作未排入。
     - manual 是手动排序，格式和 layout_day 的一样。列出的没完成的任务排在前面，先试指定的时间段，不检查 tag。
@@ -230,7 +233,8 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
                 pinned.add(uid)
     queue.extend((session, home, False) for session, home in waiting if session.uid not in pinned)
     busy = [(item.start, item.end) for item in frozen]
-    cursors = [max(window.start, at) for window in base.windows]
+    resume = max([at] + [minute + buffer_minutes for minute in done.values() if minute is not None and minute > at])
+    cursors = [max(window.start, resume) for window in base.windows]
     placed = list(frozen)
     where = {item.session.uid: item for item in frozen}
     present = {item.session.uid for item in base.placed} | {session.uid for session in base.overflow}
@@ -275,7 +279,7 @@ def replan_day(base: DayLayout, at: int, buffer_minutes: int, done: dict[str, in
             break
         pending = deferred
     placed.sort(key=lambda item: (item.start, item.session.priority))
-    return DayLayout(day=base.day, windows=base.windows, placed=placed, overflow=overflow, early=base.early)
+    return DayLayout(day=base.day, windows=base.windows, placed=placed, overflow=overflow, early=base.early, resume_at=resume)
 
 
 @dataclass

@@ -474,7 +474,9 @@ function dayView() {
         const items = [...g.tasks, ...(fixedIn.get(g) || [])].sort((a, b) => toMin(a.start) - toMin(b.start));
         // 重排过的日子里，做完的任务按完成时刻显示，不能拖动
         const tasks = items.map((t) => taskHtml(t, { fixedMark: true, drag: !(day.replan_at && t.done) })).join('')
-          || `<div class="slot-empty">${g.passed ? `已经过去，${esc(day.replan_at)} 起重排时没有放任务` : '没有安排任务'}</div>`;
+          || `<div class="slot-empty">${g.passed ? (day.resume_at && day.resume_at !== day.replan_at
+            ? `已经过去，最后一次勾选之后从 ${esc(day.resume_at)} 起排，没有放任务`
+            : `已经过去，${esc(day.replan_at)} 起重排时没有放任务`) : '没有安排任务'}</div>`;
         const lastEnd = Math.max(toMin(w.start), ...items.map((t) => Math.min(toMin(t.end), toMin(w.end))));
         const free = toMin(w.end) - lastEnd;
         return { start: w.start, html: `
