@@ -61,8 +61,9 @@ def waiting_prereqs(session: Session, present: set[str], done: set[str] | frozen
 
 def plan_track(session: Session) -> tuple[str, str] | None:
     """同一计划、同一类型（slot）的任务按计划里的先后顺序排，返回 (计划 id, 类型)。
-    类型不同的任务落在不同的时间段，不互相限制。临时任务、日程和定时任务不参与，返回 None。"""
-    if session.kind != "task" or session.is_fixed or session.plan_id == TASKS_PLAN_ID:
+    周模板的任务和没写 time 的单次任务（events）都参与，同一天里周模板的任务在前。
+    类型不同的任务落在不同的时间段，不互相限制。临时任务和定时任务不参与，返回 None。"""
+    if session.is_fixed or session.plan_id == TASKS_PLAN_ID:
         return None
     return (session.plan_id, session.slot)
 

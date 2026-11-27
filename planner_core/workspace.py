@@ -434,7 +434,7 @@ class Workspace:
     def _arrange(self, day: date, sessions: list[Session], manual: dict[int, list[str]], at: int | None) -> DayLayout:
         """排一天的任务。在这一天之前就完成的任务不占时间，其余任务按空出的时间排。at 是重排时刻。"""
         done_at = {session.uid: self._done_moment(session.uid) for session in sessions if self.progress.is_done(session.uid)}
-        early = [session for session in sessions if done_at.get(session.uid) and done_at[session.uid].date() < day]
+        early = [session for session in sessions if self._done_before(session, day)]
         skipped = {session.uid for session in early}
         rest = [session for session in sessions if session.uid not in skipped]
         layout = layout_day(day, rest, self.profile.windows_for(day), self.profile.buffer_minutes, manual, set(done_at))
@@ -444,6 +444,13 @@ class Workspace:
             layout = replan_day(layout, at, self.profile.buffer_minutes, done, manual)
         layout.early = early
         return layout
+
+    def _done_before(self, session: Session, day: date) -> bool:
+        """任务在 day 之前就完成了。这样的任务不占 day 的时间。"""
+        if not self.progress.is_done(session.uid):
+            return False
+        moment = self._done_moment(session.uid)
+        return moment is not None and moment.date() < day
 
     def _done_moment(self, uid: str) -> datetime | None:
         """任务的完成时刻。旧版本的完成记录没有时刻，返回 None。"""
@@ -839,7 +846,11 @@ class Workspace:
     # ---------- 统计与检查 ----------
 
     def feasibility(self, start: date, end: date) -> Feasibility:
-        return feasibility(self.sessions_on, self.profile, start, end, self.manual_order, set(self.progress.records))
+        """可行性统计。和日程页一样，在那一天之前就完成的任务不占那一天的时间，也不算进所需时间。"""
+        def taking_time(day: date) -> list[Session]:
+            return [session for session in self.sessions_on(day) if not self._done_before(session, day)]
+
+        return feasibility(taking_time, self.profile, start, end, self.manual_order, set(self.progress.records))
 
     def plan_warnings(self) -> list[str]:
         warnings = []
